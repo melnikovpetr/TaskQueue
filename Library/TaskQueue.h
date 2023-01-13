@@ -2,6 +2,7 @@
 #define TASK_QUEUE_H
 
 #include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <functional>
 #include <mutex>

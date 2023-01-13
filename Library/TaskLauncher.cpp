@@ -40,16 +40,17 @@ void TaskLauncher::start()
 {
   for (auto& taskThread : _taskThreads)
     if (!taskThread.joinable())
-      taskThread.swap(std::thread{ [this]()
-        {
+      std::thread{
+        [this]() {
           while (true)
           {
-            auto& task = _taskQueue->pop();
+            auto task{ _taskQueue->pop() };
             if (task.first == finishTaskId())
               break;
             task.second();
           }
-        } });
+        }
+      }.swap(taskThread);
 }
 
 ThreadCount TaskLauncher::threadCount() const

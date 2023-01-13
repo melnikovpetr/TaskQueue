@@ -1,12 +1,17 @@
-#include "TaskLauncher.h"
+#include <TaskLauncher.h>
 
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QMessageBox>
 
 #include <QtCore/QEvent>
 
+#include <chrono>
 #include <iostream>
 #include <sstream>
+
+namespace bind_ph = std::placeholders;
+
+using namespace std::chrono_literals;
 
 class TaskEvent : public QEvent
 {
@@ -26,7 +31,7 @@ public:
 public:
   TaskEvent(int type, TaskId taskId, const QVariant& taskInfo)
     : QEvent(static_cast<QEvent::Type>(type))
-    , _taskId{ _taskId }
+    , _taskId{ taskId }
     , _taskInfo{ taskInfo }
   {
   }
@@ -57,17 +62,15 @@ int main(int argc, char* argv[])
     }
   } resultReceiver{};
 
-  TaskLauncher launcher{ std::bind(
-    TaskEvent::taskEndEventFn, &resultReceiver, std::placeholders::_1, std::placeholders::_2) };
-
+  TaskLauncher launcher{ std::bind(TaskEvent::taskEndEventFn, &resultReceiver, bind_ph::_1, bind_ph::_2) };
   launcher.start();
 
-  auto taskFn = [](const QString& name) -> QVariant
-  {
+  auto taskFn = [](const QString& name) -> QVariant {
     std::ostringstream infoStream{};
     infoStream << "Task name: " << name.toStdString() << std::endl
                << "Thread id: " << std::this_thread::get_id() << std::endl
                << "Complete!" << std::endl;
+    std::this_thread::sleep_for(1000ms);
     return QString::fromStdString(infoStream.str());
   };
 

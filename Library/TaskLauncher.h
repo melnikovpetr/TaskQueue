@@ -1,6 +1,8 @@
 #ifndef TASK_LAUNCHER_H
 #define TASK_LAUNCHER_H
 
+#include "TaskQueueExport.h"
+
 #include <any>
 #include <functional>
 #include <future>
@@ -25,7 +27,7 @@ struct TaskHandle
   TaskResult<TReturn> result;
 };
 
-class TaskLauncher
+class TASKQUEUE_EXPORT TaskLauncher
 {
 public:
   TaskLauncher(
@@ -37,16 +39,15 @@ public:
   {
     using TReturn = std::result_of_t<TFn(TArgs...)>;
     using THandle = TaskHandle<TReturn>;
-    std::packaged_task<TReturn()> task{ std::bind(std::forward<TFn>(fn), std::forward<TArgs>(args)...) };
-    THandle taskHandle{ generateTaskId(), task.get_future().share() };
+    auto task =
+      std::make_shared<std::packaged_task<TReturn()>>(std::bind(std::forward<TFn>(fn), std::forward<TArgs>(args)...));
+    THandle taskHandle{ generateTaskId(), task->get_future().share() };
 
-    queueTask(taskHandle.id,
-      [task{ std::move(task) }, taskHandle, taskEndEventFn = _taskEndEventFn]() mutable
-      {
-        task();
-        if (taskEndEventFn && taskHandle.result.valid())
-          taskEndEventFn(taskHandle.id, taskHandle.result.get());
-      });
+    queueTask(taskHandle.id, [task, taskHandle, taskEndEventFn = _taskEndEventFn]() {
+      task->operator()();
+      if (taskEndEventFn && taskHandle.result.valid())
+        taskEndEventFn(taskHandle.id, taskHandle.result.get());
+    });
     return taskHandle;
   }
 

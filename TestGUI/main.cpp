@@ -65,7 +65,8 @@ int main(int argc, char* argv[])
   TaskLauncher launcher{ std::bind(TaskEvent::taskEndEventFn, &resultReceiver, bind_ph::_1, bind_ph::_2) };
   launcher.start();
 
-  auto taskFn = [](const QString& name) -> QVariant {
+  auto taskFn = [](const QString& name) -> QVariant
+  {
     std::ostringstream infoStream{};
     infoStream << "Task name: " << name.toStdString() << std::endl
                << "Thread id: " << std::this_thread::get_id() << std::endl

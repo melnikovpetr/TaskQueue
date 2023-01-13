@@ -9,7 +9,7 @@ source_group(Headers FILES ${HEADERS})
 set(EXECUTABLE_FLAGS)
 
 set(PRIVATE_LINK_LIBS
-  TaskQueue)
+  TaskQueue::TaskQueue)
 
 add_executable(TestConsole
   ${EXECUTABLE_FLAGS}

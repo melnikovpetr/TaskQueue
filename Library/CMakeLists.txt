@@ -3,12 +3,12 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(SOURCES
   TaskLauncher.cpp
   TaskQueue.cpp)
+source_group(Sources FILES ${SOURCES})
 
-set(PUBLIC_HEADERS
+set(HEADERS
+  TaskQueue.h
   TaskLauncher.h)
-
-set(PRIVATE_HEADERS
-  TaskQueue.h)
+source_group(Headers FILES ${HEADERS})
 
 set(PRIVATE_LINK_LIBS
   )
@@ -22,26 +22,27 @@ add_library(TaskQueue SHARED)
 add_library(TaskQueue::TaskQueue ALIAS TaskQueue)
 
 include(GenerateExportHeader)
-set(TASKQUEUE_EXPORT_FILE TaskQueueExport.h)
+set(TARGET_EXPORT_HEADER TaskQueueExport.h)
 generate_export_header(TaskQueue
   EXPORT_MACRO_NAME TASKQUEUE_EXPORT
-  EXPORT_FILE_NAME ${TASKQUEUE_EXPORT_FILE})
-list (APPEND PUBLIC_HEADERS
-  ${CMAKE_CURRENT_BINARY_DIR}/${TASKQUEUE_EXPORT_FILE})
+  EXPORT_FILE_NAME ${TARGET_EXPORT_HEADER})
+
+target_include_directories(TaskQueue
+  PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>"
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 
 target_sources(TaskQueue
-  PUBLIC
-    ${PUBLIC_HEADERS}
   PRIVATE
-    ${PRIVATE_HEADERS}
+    ${HEADERS}
     ${SOURCES})
-
-set_target_properties(TaskQueue PROPERTIES
-    PUBLIC_HEADER "${PUBLIC_HEADERS}")
 
 target_link_libraries(TaskQueue
   PRIVATE
     ${PRIVATE_LINK_LIBS})
 
-install(FILES ${headers} ${CMAKE_CURRENT_BINARY_DIR}/${TASKQUEUE_EXPORT_FILE}
-  DESTINATION include)
+if(NOT CMAKE_SKIP_INSTALL_RULES)
+  install(FILES ${headers} ${CMAKE_CURRENT_BINARY_DIR}/${TARGET_EXPORT_HEADER}
+    DESTINATION include)
+endif()

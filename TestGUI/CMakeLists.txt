@@ -8,15 +8,16 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 set(SOURCES
-  main.cpp)
+  main.cpp
+  TestDialog.cpp)
 source_group(Sources FILES ${SOURCES})
 
 set(HEADERS
-  )
+  TestDialog.h)
 source_group(Headers FILES ${HEADERS})
 
 set(UIS
-  )
+  TestDialog.ui)
 source_group(UIs FILES ${UIS})
 
 set(EXECUTABLE_FLAGS)

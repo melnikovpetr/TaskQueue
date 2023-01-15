@@ -15,7 +15,11 @@
   </property>
   <layout class="QVBoxLayout" name="verticalLayout_2">
    <item>
-    <widget class="QTableView" name="taskStatusTable"/>
+    <widget class="QTableView" name="taskStatusTable">
+     <property name="toolTip">
+      <string>Task information</string>
+     </property>
+    </widget>
    </item>
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout">
@@ -28,7 +32,20 @@
         <number>2</number>
        </property>
        <item>
+        <widget class="QLabel" name="label">
+         <property name="text">
+          <string>Array size:</string>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="QSlider" name="arraySizeSldr">
+         <property name="toolTip">
+          <string>Change array size</string>
+         </property>
+         <property name="tracking">
+          <bool>false</bool>
+         </property>
          <property name="orientation">
           <enum>Qt::Horizontal</enum>
          </property>
@@ -42,6 +59,9 @@
            <verstretch>0</verstretch>
           </sizepolicy>
          </property>
+         <property name="toolTip">
+          <string>Array size</string>
+         </property>
          <property name="maxLength">
           <number>10</number>
          </property>
@@ -54,24 +74,12 @@
         </widget>
        </item>
        <item>
-        <widget class="QPushButton" name="resetArraySizeBttn">
-         <property name="text">
-          <string/>
-         </property>
-         <property name="icon">
-          <iconset theme="edit-undo">
-           <normaloff>.</normaloff>.</iconset>
-         </property>
-        </widget>
-       </item>
-       <item>
         <widget class="QPushButton" name="applyArraySizeBttn">
+         <property name="toolTip">
+          <string>Generate new array</string>
+         </property>
          <property name="text">
           <string/>
-         </property>
-         <property name="icon">
-          <iconset theme="edit-redo">
-           <normaloff>.</normaloff>.</iconset>
          </property>
         </widget>
        </item>
@@ -79,12 +87,14 @@
      </item>
      <item>
       <widget class="QPushButton" name="startStopBttn">
+       <property name="toolTip">
+        <string>Start/Stop sorting</string>
+       </property>
        <property name="text">
         <string/>
        </property>
-       <property name="icon">
-        <iconset theme="appointment-new">
-         <normaloff>.</normaloff>.</iconset>
+       <property name="checkable">
+        <bool>true</bool>
        </property>
       </widget>
      </item>

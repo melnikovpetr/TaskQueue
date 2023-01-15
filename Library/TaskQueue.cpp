@@ -15,6 +15,7 @@ SpinLock::~SpinLock()
 TaskQueue::TaskQueue()
   : _isBusy{ ATOMIC_FLAG_INIT }
   , _queue{}
+  , _started{ false }
 {
 }
 
@@ -23,7 +24,7 @@ Task TaskQueue::pop()
   Task task{};
   if (std::unique_lock taskQueueLock{ _taskMutex })
   {
-    _taskCV.wait(taskQueueLock, [this]() { return size(); });
+    _taskCV.wait(taskQueueLock, [this]() { return !isStarted() && size(); });
     {
       SpinLock spinLock{ _isBusy };
       task = std::move(_queue.back());
@@ -40,6 +41,21 @@ void TaskQueue::push(Task&& task)
     _queue.push_back(std::move(task));
   }
   _taskCV.notify_one();
+}
+
+bool TaskQueue::isStarted() const
+{
+  return _started;
+}
+
+void TaskQueue::stop()
+{
+  _started = false;
+}
+
+void TaskQueue::start()
+{
+  _started = true;
 }
 
 void TaskQueue::clear()

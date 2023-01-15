@@ -25,6 +25,14 @@ struct TaskHandle
 {
   TaskId id;
   TaskResult<TReturn> result;
+
+  std::any resultValue() const
+  {
+    if constexpr (std::is_same_v<TReturn, void>)
+      return result.valid() ? (result.get(), std::any{}) : std::any{};
+    else
+      return result.valid() ? result.get() : std::any{};
+  };
 };
 
 class TASKQUEUE_EXPORT TaskLauncher
@@ -35,20 +43,47 @@ public:
   ~TaskLauncher();
 
   template<typename TFn, typename... TArgs>
-  TaskHandle<std::result_of_t<TFn(TArgs...)>> queueTask(TFn&& fn, TArgs&&... args)
+  TaskHandle<std::result_of_t<TFn(TaskId id, TArgs...)>> queueTask(TFn&& fn, TArgs&&... args)
   {
-    using TReturn = std::result_of_t<TFn(TArgs...)>;
+    using TReturn = std::result_of_t<TFn(TaskId id, TArgs...)>;
     using THandle = TaskHandle<TReturn>;
-    auto task =
-      std::make_shared<std::packaged_task<TReturn()>>(std::bind(std::forward<TFn>(fn), std::forward<TArgs>(args)...));
-    THandle taskHandle{ generateTaskId(), task->get_future().share() };
+    auto taskId = generateTaskId();
+    auto task = std::make_shared<std::packaged_task<TReturn()>>(
+      std::bind(std::forward<TFn>(fn), taskId, std::forward<TArgs>(args)...));
+    THandle taskHandle{ taskId, task->get_future().share() };
 
     queueTask(taskHandle.id, [task, taskHandle, taskEndEventFn = _taskEndEventFn]() {
       task->operator()();
-      if (taskEndEventFn && taskHandle.result.valid())
-        taskEndEventFn(taskHandle.id, taskHandle.result.get());
+      if (taskEndEventFn)
+        taskEndEventFn(taskHandle.id, taskHandle.resultValue());
     });
     return taskHandle;
+  }
+
+  template<typename TFn>
+  std::vector<TaskHandle<std::result_of_t<TFn(TaskId id, size_t, size_t)>>> queueBatch(
+    size_t first, size_t last, size_t grain, TFn&& fn)
+  {
+    decltype(queueBatch(first, last, grain, std::forward<TFn>(fn))) result{};
+    auto count = last - first;
+    if (count == 0)
+      return result;
+    if (grain >= count)
+    {
+      result.push_back(queueTask(std::forward<TFn>(fn), first, last));
+    }
+    else
+    {
+      if (grain == 0)
+        grain = count / threadCount() + (count % threadCount() ? 1 : 0);
+      result.reserve(count % grain ? (count / grain) + 1 : count / grain);
+      for (auto from = first; from < last; from += grain)
+      {
+        auto to = std::min(last, from + grain);
+        result.push_back(queueTask(std::forward<TFn>(fn), from, to));
+      }
+    }
+    return result;
   }
 
   void clear();

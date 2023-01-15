@@ -27,6 +27,9 @@ public:
   TaskQueue();
   Task pop();
   void push(Task&& task);
+  bool isStarted() const;
+  void stop();
+  void start();
   void clear();
   size_t size() const;
 
@@ -35,6 +38,7 @@ private:
   std::deque<Task> _queue;
   std::mutex _taskMutex;
   std::condition_variable _taskCV;
+  bool _started;
 };
 
 #endif // TASK_QUEUE_H

@@ -1,3 +1,5 @@
+#include "TestDialog.h"
+
 #include <QtWidgets/QApplication>
 
 int main(int argc, char* argv[])
@@ -6,6 +8,10 @@ int main(int argc, char* argv[])
     QApplication::addLibraryPath(QString() + getenv("QTDIR") + "/plugins");
 
   QApplication a{ argc, argv };
+  TestDialog dialog{};
+
+  dialog.show();
   a.exec();
+
   return 0;
 }

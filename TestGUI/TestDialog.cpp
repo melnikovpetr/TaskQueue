@@ -3,7 +3,74 @@
 
 #include <TaskLauncher.h>
 
+#include <algorithm>
+#include <cmath>
+#include <sstream>
+
 namespace bind_ph = std::placeholders;
+
+using Array = std::vector<ArrayValue>;
+using ThreadId = std::thread::id;
+
+#ifdef WIN32
+#include <windows.h>
+static size_t availableSystemMemory()
+{
+  MEMORYSTATUSEX statex;
+  statex.dwLength = sizeof(statex);
+  ::GlobalMemoryStatusEx(&statex);
+  return statex.ullAvailPhys;
+}
+#else
+#include <unistd.h>
+static size_t availableSystemMemory()
+{
+  return ::sysconf(_SC_PAGE_SIZE) * ::sysconf(_SC_AVPHYS_PAGES);
+}
+#endif
+
+static size_t operCount(size_t arraySize)
+{
+  assert(arraySize > 0);
+  return arraySize * std::log(arraySize);
+}
+
+static size_t minArraySize(ThreadCount threadCount)
+{
+  assert(threadCount > 0);
+  return threadCount * 2;
+}
+
+static std::string threadIdToStr(ThreadId threadId)
+{
+  std::ostringstream ss{};
+  ss << threadId;
+  return ss.str();
+}
+
+static size_t maxArraySize()
+{
+  return availableSystemMemory() / (sizeof(ArrayValue) * 2);
+}
+
+static std::vector<std::pair<size_t, size_t>> arrayThreadRanges(ThreadCount threadCount, size_t arraySize)
+{
+  assert((threadCount > 0) && (arraySize >= minArraySize(threadCount)));
+  decltype(arrayThreadRanges(threadCount, arraySize)) result(threadCount);
+  size_t arrayThreadRangeSize = arraySize / threadCount;
+  for (size_t threadIndex = 0; threadIndex < (threadCount - 1); ++threadIndex)
+  {
+    result[threadIndex].first = threadIndex * arrayThreadRangeSize;
+    result[threadIndex].second =
+      threadIndex < (threadCount - 1) ? result[threadIndex].first + arrayThreadRangeSize : arraySize;
+  }
+  return result;
+}
+
+static size_t progressGrain(size_t operCount)
+{
+  return operCount >= 20 ? operCount / 20 : 1;
+}
 
 class TaskEvent : public QEvent
 {
@@ -26,7 +93,15 @@ public:
       reseiver, new TaskEvent{ taskEndEventType(), taskId, std::any_cast<QVariant>(taskReturn) });
   }
 
-  static void taskProgressEventFn(QObject* reseiver, TaskId taskId, int taskProgress)
+  static void taskStartEventFn(QObject* reseiver, TaskId taskId, const ThreadId threadId, size_t from, size_t to)
+  {
+    QVariant thrdId = QString::fromStdString(::threadIdToStr(threadId));
+    QVariant taskRange = "[" + QString::number(from) + ", " + QString::number(to) + ")";
+    QCoreApplication::postEvent(
+      reseiver, new TaskEvent{ taskEndEventType(), taskId, QVariantList{ thrdId, taskRange } });
+  }
+
+  static void taskProgressEventFn(QObject* reseiver, TaskId taskId, double taskProgress)
   {
     QCoreApplication::postEvent(reseiver, new TaskEvent{ taskEndEventType(), taskId, taskProgress });
   }
@@ -50,41 +125,55 @@ private:
 class TestDialogInternal
 {
 public:
-  using Array = std::vector<TestDialog::ArrayValue>;
-
-  static size_t calcOperCount(size_t arraySize);
-  static std::vector<Array> createArrayParts(ThreadCount threadCount, size_t arraySize);
-  static size_t calcProgressGrain(size_t operCount);
-
-public:
   TestDialogInternal(TestDialog* self)
-    : taskLauncher{ std::bind(TaskEvent::taskEndEventFn, self, bind_ph::_1, bind_ph::_2) }
-    , array(taskLauncher.threadCount() * 2)
-    , arrayParts(taskLauncher.threadCount(), Array(array.size() / taskLauncher.threadCount()))
-    , operCount{}
-    , progressGrain{ operGrain >= 20 ? operGrain / 20 : 1 }
-    , interraptFlag{ false }
+    : _self{ self }
+    , _taskLauncher{ std::bind(TaskEvent::taskEndEventFn, self, bind_ph::_1, bind_ph::_2) }
+    , _array(::minArraySize(_taskLauncher.threadCount()))
+    , _interruptFlag{ false }
   {
+    _taskLauncher.start();
   }
 
-  bool operator()(const TestDialog::ArrayValue& l, const TestDialog::ArrayValue& r)
+  void sort()
   {
-    if (!((pntIndex - begin) % progressGrain))
-    {
-      auto prevGlobalOperindex = globalOperIndex.fetch_add(progressGrain, std::memory_order_relaxed);
-      if (!threadNumber)
-        this->UpdateProgress(static_cast<double>(prevGlobalOperindex) / operCount);
-      if (this->GetAbortExecute())
-        break;
-    }
+    _interruptFlag = false;
+    _taskLauncher.queueBatch(0, _array.size(), 0, [this](TaskId taskId, size_t from, size_t to) {
+      auto threadOperIndex = size_t(0);
+      auto threadOperCount = ::operCount(to - from);
+      auto progressGrain = ::progressGrain(threadOperCount);
+      auto threadCmpPred = [this, taskId, threadOperIndex, threadOperCount, progressGrain](
+                             const ArrayValue& l, const ArrayValue& r) mutable -> bool {
+        if (!(threadOperIndex % progressGrain))
+        {
+          TaskEvent::taskProgressEventFn(_self, taskId, static_cast<double>(threadOperIndex) / threadOperCount);
+          if (_interruptFlag)
+            throw std::runtime_error("Interrupted!");
+        }
+        threadOperIndex++;
+        return l < r;
+      };
+      TaskEvent::taskStartEventFn(_self, taskId, std::this_thread::get_id(), from, to);
+      std::sort(_array.begin() + from, _array.begin() + to, threadCmpPred);
+    });
   }
 
-  TaskLauncher taskLauncher;
-  Array array;
-  std::vector<Array> arrayParts;
-  size_t operCount;
-  int progressGrain;
-  bool interruptFlag;
+  void interrupt()
+  {
+    _taskLauncher.clear();
+    _interruptFlag = true;
+  }
+
+  ThreadCount threadCount() const { return _taskLauncher.threadCount(); }
+
+  size_t arraySize() const { return _array.size(); }
+
+  size_t generateArray() const { return _array.size(); }
+
+private:
+  TestDialog* _self;
+  TaskLauncher _taskLauncher;
+  Array _array;
+  bool _interruptFlag;
 };
 
 TestDialog::TestDialog(QWidget* parent)
@@ -93,18 +182,14 @@ TestDialog::TestDialog(QWidget* parent)
   , _data(new TestDialogInternal{ this })
 {
   _ui->setupUi(this);
-  /*
-  QVBoxLayout *verticalLayout_2;
-  QTableView *taskStatusTable;
-  QHBoxLayout *horizontalLayout;
-  QHBoxLayout *horizontalLayout_2;
-  QSlider *horizontalSlider;
-  QLineEdit *arraySizeEdit;
-  QPushButton *resetArraySizeBttn;
-  QPushButton *applyArraySizeBttn;
-  QPushButton *startStopBttn;*/
 
-  _data->taskLauncher.start();
+  connect(_ui->arraySizeSldr, &QSlider::valueChanged, this, &TestDialog::changeArraySize);
+  connect(_ui->applyArraySizeBttn, &QPushButton::clicked, this, &TestDialog::applyArraySize);
+  connect(_ui->startStopBttn, &QPushButton::toggled, this, &TestDialog::startStopSorting);
+
+  _ui->arraySizeSldr->setMinimum(::minArraySize(_data->threadCount()));
+  _ui->arraySizeSldr->setMaximum(::maxArraySize());
+  _ui->arraySizeSldr->setValue(_data->arraySize());
 }
 
 TestDialog::~TestDialog()
@@ -116,28 +201,31 @@ TestDialog::~TestDialog()
 bool TestDialog::event(QEvent* event)
 {
   if (event->type() == TaskEvent::taskEndEventType())
-    QMessageBox::information(nullptr, "Inform", static_cast<TaskEvent*>(event)->taskInfo().toString());
-  return true;
+  {
+    auto taskEvent = static_cast<TaskEvent*>(event);
+    return true;
+  }
+  else if (event->type() == TaskEvent::taskProgressEventType())
+  {
+    auto taskEvent = static_cast<TaskEvent*>(event);
+    return true;
+  }
+  return QDialog::event(event);
 }
 
-void TestDialog::changeArraySize() {}
+void TestDialog::changeArraySize()
+{
+  _ui->arraySizeEdit->setText(QString::number(_ui->arraySizeSldr->value()));
+}
 
 void TestDialog::resetArraySize() {}
 
 void TestDialog::applyArraySize() {}
 
-void TestDialog::startStopSorting()
+void TestDialog::startStopSorting(bool start)
 {
-  for (auto& num : { 1, 2, 4, 5, 6, 7, 8, 9 })
-    launcher.queueTask(taskFn, "Task " + QString::number(num));
-}
-
-std::pair<TestDialog::ArrayValue, TestDialog::ArrayValue> TestDialog::operator()(size_t begin, size_t end) const
-{
-  std::ostringstream infoStream{};
-  infoStream << "Task name: " << name.toStdString() << std::endl
-             << "Thread id: " << std::this_thread::get_id() << std::endl
-             << "Complete!" << std::endl;
-  std::this_thread::sleep_for(1000ms);
-  return QString::fromStdString(infoStream.str());
+  if (start)
+    _data->sort();
+  else
+    _data->interrupt();
 }

@@ -9,13 +9,11 @@ class TestDialog;
 }
 
 class TestDialogInternal;
+using ArrayValue = int;
 
 class TestDialog : public QDialog
 {
   Q_OBJECT
-
-public:
-  using ArrayValue = int;
 
 public:
   explicit TestDialog(QWidget* parent = nullptr);
@@ -27,10 +25,7 @@ public Q_SLOTS:
   void changeArraySize();
   void resetArraySize();
   void applyArraySize();
-  void startStopSorting();
-
-protected:
-  std::pair<ArrayValue, ArrayValue> operator()(size_t begin, size_t end) const;
+  void startStopSorting(bool start);
 
 private:
   Ui::TestDialog* _ui;

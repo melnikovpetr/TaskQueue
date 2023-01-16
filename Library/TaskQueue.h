@@ -8,8 +8,15 @@
 #include <mutex>
 
 using TaskId = long long;
-using TaskFn = std::function<void()>;
-using Task = std::pair<TaskId, TaskFn>;
+using TaskFn = std::function<void(void)>;
+using TaskWaiterFn = std::function<void(void)>;
+
+struct Task
+{
+  TaskId taskId;
+  TaskFn taskFn;
+  TaskWaiterFn taskWaiterFn;
+};
 
 class SpinLock
 {
@@ -25,7 +32,8 @@ class TaskQueue
 {
 public:
   TaskQueue();
-  Task pop();
+  Task pop(TaskWaiterFn& taskWaiterFn);
+  auto lockPopping() { return std::unique_lock{ _taskMutex }; }
   void push(Task&& task);
   bool isStarted() const;
   void stop();
@@ -38,7 +46,7 @@ private:
   std::deque<Task> _queue;
   std::mutex _taskMutex;
   std::condition_variable _taskCV;
-  bool _started;
+  std::atomic<bool> _started;
 };
 
 #endif // TASK_QUEUE_H

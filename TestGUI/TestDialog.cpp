@@ -3,14 +3,21 @@
 
 #include <TaskLauncher.h>
 
+#include <QtGui/QStandardItemModel>
+
+#include <QtWidgets/QMessageBox>
+
 #include <algorithm>
 #include <cmath>
+#include <random>
 #include <sstream>
 
 namespace bind_ph = std::placeholders;
 
 using Array = std::vector<ArrayValue>;
 using ThreadId = std::thread::id;
+
+Q_DECLARE_METATYPE(TaskResult<QVariant>)
 
 #ifdef WIN32
 #include <windows.h>
@@ -32,7 +39,7 @@ static size_t availableSystemMemory()
 static size_t operCount(size_t arraySize)
 {
   assert(arraySize > 0);
-  return arraySize * std::log(arraySize);
+  return 2 * arraySize * std::log(arraySize);
 }
 
 static size_t minArraySize(ThreadCount threadCount)
@@ -41,30 +48,16 @@ static size_t minArraySize(ThreadCount threadCount)
   return threadCount * 2;
 }
 
-static std::string threadIdToStr(ThreadId threadId)
-{
-  std::ostringstream ss{};
-  ss << threadId;
-  return ss.str();
-}
-
 static size_t maxArraySize()
 {
   return availableSystemMemory() / (sizeof(ArrayValue) * 2);
 }
 
-static std::vector<std::pair<size_t, size_t>> arrayThreadRanges(ThreadCount threadCount, size_t arraySize)
+static std::string threadIdToStr(ThreadId threadId)
 {
-  assert((threadCount > 0) && (arraySize >= minArraySize(threadCount)));
-  decltype(arrayThreadRanges(threadCount, arraySize)) result(threadCount);
-  size_t arrayThreadRangeSize = arraySize / threadCount;
-  for (size_t threadIndex = 0; threadIndex < (threadCount - 1); ++threadIndex)
-  {
-    result[threadIndex].first = threadIndex * arrayThreadRangeSize;
-    result[threadIndex].second =
-      threadIndex < (threadCount - 1) ? result[threadIndex].first + arrayThreadRangeSize : arraySize;
-  }
-  return result;
+  std::ostringstream ss{};
+  ss << threadId;
+  return ss.str();
 }
 
 static size_t progressGrain(size_t operCount)
@@ -75,7 +68,7 @@ static size_t progressGrain(size_t operCount)
 class TaskEvent : public QEvent
 {
 public:
-  static int taskEndEventType()
+  static int taskStartEventType()
   {
     static auto type = QEvent::registerEventType();
     return type;
@@ -87,10 +80,10 @@ public:
     return type;
   }
 
-  static void taskEndEventFn(QObject* reseiver, TaskId taskId, TaskReturn&& taskReturn)
+  static int taskEndEventType()
   {
-    QCoreApplication::postEvent(
-      reseiver, new TaskEvent{ taskEndEventType(), taskId, std::any_cast<QVariant>(taskReturn) });
+    static auto type = QEvent::registerEventType();
+    return type;
   }
 
   static void taskStartEventFn(QObject* reseiver, TaskId taskId, const ThreadId threadId, size_t from, size_t to)
@@ -98,12 +91,17 @@ public:
     QVariant thrdId = QString::fromStdString(::threadIdToStr(threadId));
     QVariant taskRange = "[" + QString::number(from) + ", " + QString::number(to) + ")";
     QCoreApplication::postEvent(
-      reseiver, new TaskEvent{ taskEndEventType(), taskId, QVariantList{ thrdId, taskRange } });
+      reseiver, new TaskEvent{ taskStartEventType(), taskId, QVariantList{ thrdId, taskRange } });
   }
 
   static void taskProgressEventFn(QObject* reseiver, TaskId taskId, double taskProgress)
   {
-    QCoreApplication::postEvent(reseiver, new TaskEvent{ taskEndEventType(), taskId, taskProgress });
+    QCoreApplication::postEvent(reseiver, new TaskEvent{ taskProgressEventType(), taskId, taskProgress });
+  }
+
+  static void taskEndEventFn(QObject* reseiver, TaskId taskId, const TaskResult<QVariant>& taskResult)
+  {
+    QCoreApplication::postEvent(reseiver, new TaskEvent{ taskEndEventType(), taskId, QVariant::fromValue(taskResult) });
   }
 
 public:
@@ -127,54 +125,91 @@ class TestDialogInternal
 public:
   TestDialogInternal(TestDialog* self)
     : _self{ self }
-    , _taskLauncher{ std::bind(TaskEvent::taskEndEventFn, self, bind_ph::_1, bind_ph::_2) }
+    , _taskLauncher{}
     , _array(::minArraySize(_taskLauncher.threadCount()))
     , _interruptFlag{ false }
   {
-    _taskLauncher.start();
   }
+
+  ~TestDialogInternal() { _taskLauncher.stopAndWait(&_interruptFlag); }
 
   void sort()
   {
-    _interruptFlag = false;
-    _taskLauncher.queueBatch(0, _array.size(), 0, [this](TaskId taskId, size_t from, size_t to) {
-      auto threadOperIndex = size_t(0);
-      auto threadOperCount = ::operCount(to - from);
-      auto progressGrain = ::progressGrain(threadOperCount);
-      auto threadCmpPred = [this, taskId, threadOperIndex, threadOperCount, progressGrain](
-                             const ArrayValue& l, const ArrayValue& r) mutable -> bool {
-        if (!(threadOperIndex % progressGrain))
-        {
-          TaskEvent::taskProgressEventFn(_self, taskId, static_cast<double>(threadOperIndex) / threadOperCount);
-          if (_interruptFlag)
-            throw std::runtime_error("Interrupted!");
-        }
-        threadOperIndex++;
-        return l < r;
-      };
-      TaskEvent::taskStartEventFn(_self, taskId, std::this_thread::get_id(), from, to);
-      std::sort(_array.begin() + from, _array.begin() + to, threadCmpPred);
-    });
+    TaskEndEventFn<QVariant> taskEndEventFn = std::bind(TaskEvent::taskEndEventFn, _self, bind_ph::_1, bind_ph::_2);
+    _taskIndexes.clear();
+    _taskLauncher.queueBatch(
+      0, _array.size(), 0,
+      [this](TaskId taskId, size_t from, size_t to) -> QVariant {
+        auto threadOperIndex = size_t(0);
+        auto threadOperCount = ::operCount(to - from);
+        auto progressGrain = ::progressGrain(threadOperCount);
+        auto threadCmpPred = [this, taskId, &threadOperIndex, threadOperCount, progressGrain](
+                               const ArrayValue& l, const ArrayValue& r) mutable -> bool {
+          if (threadOperIndex && !(threadOperIndex % progressGrain))
+          {
+            auto progress = static_cast<double>(threadOperIndex) / threadOperCount;
+            TaskEvent::taskProgressEventFn(_self, taskId, progress >= 1.0 ? 0.99 : progress);
+            if (_interruptFlag)
+              throw std::runtime_error("Task with id = " + std::to_string(taskId) + " was interrupted!");
+          }
+          threadOperIndex++;
+          return l < r;
+        };
+        TaskEvent::taskStartEventFn(_self, taskId, std::this_thread::get_id(), from, to);
+        std::sort(_array.begin() + from, _array.begin() + to, threadCmpPred);
+        return QString("min = %1, max = %2").arg(_array[from]).arg(_array[to - 1]);
+      },
+      taskEndEventFn);
   }
 
   void interrupt()
   {
+    _taskLauncher.stopAndWait(&_interruptFlag);
     _taskLauncher.clear();
-    _interruptFlag = true;
+    _interruptFlag = false;
+    _taskLauncher.start();
   }
 
   ThreadCount threadCount() const { return _taskLauncher.threadCount(); }
 
   size_t arraySize() const { return _array.size(); }
 
-  size_t generateArray() const { return _array.size(); }
+  void saveTaskId(TaskId taskId) { _taskIndexes.insert({ taskId, _taskIndexes.size() }); }
+
+  void deleteTaskId(TaskId taskId) { _taskIndexes.erase(taskId); }
+
+  auto hasSavedTaskIds() const { return _taskIndexes.size(); }
+
+  auto isTaskIdSaved(TaskId taskId) const { return _taskIndexes.find(taskId) != _taskIndexes.cend(); }
+
+  auto taskIndex(TaskId taskId) const { return _taskIndexes.at(taskId); }
+
+  void generateArray(size_t arraySize)
+  {
+    interrupt();
+    _array.resize(arraySize);
+    auto taskHandles = _taskLauncher.queueBatch(0, _array.size(), 0, [this](TaskId taskId, size_t from, size_t to) {
+      std::uniform_int_distribution<int> distribution(0, _array.size() - 1);
+      std::mt19937 randomEngine{ std::random_device{}() };
+      auto random = std::bind(distribution, randomEngine);
+      for (auto index = from; index < to; ++index)
+        _array[index] = random();
+    });
+    for (auto& taskHandle : taskHandles)
+      taskHandle.result.wait();
+  }
 
 private:
   TestDialog* _self;
   TaskLauncher _taskLauncher;
   Array _array;
-  bool _interruptFlag;
+  std::atomic<bool> _interruptFlag;
+  std::unordered_map<TaskId, size_t> _taskIndexes;
 };
+
+// clang-format off
+struct TaskStatusCols { enum : int { ID, THREAD_ID, INFO, PROGRESS, RESULT, _COUNT }; };
+// clang-format on
 
 TestDialog::TestDialog(QWidget* parent)
   : QDialog(parent)
@@ -182,6 +217,17 @@ TestDialog::TestDialog(QWidget* parent)
   , _data(new TestDialogInternal{ this })
 {
   _ui->setupUi(this);
+
+  auto taskStatusModel = new QStandardItemModel{ _ui->taskStatusTable };
+
+  taskStatusModel->setColumnCount(TaskStatusCols::_COUNT);
+  taskStatusModel->setHeaderData(TaskStatusCols::ID, Qt::Horizontal, "Id");
+  taskStatusModel->setHeaderData(TaskStatusCols::THREAD_ID, Qt::Horizontal, "Thread Id");
+  taskStatusModel->setHeaderData(TaskStatusCols::INFO, Qt::Horizontal, "Info");
+  taskStatusModel->setHeaderData(TaskStatusCols::PROGRESS, Qt::Horizontal, "Progress");
+  taskStatusModel->setHeaderData(TaskStatusCols::RESULT, Qt::Horizontal, "Result");
+
+  _ui->taskStatusTable->setModel(taskStatusModel);
 
   connect(_ui->arraySizeSldr, &QSlider::valueChanged, this, &TestDialog::changeArraySize);
   connect(_ui->applyArraySizeBttn, &QPushButton::clicked, this, &TestDialog::applyArraySize);
@@ -200,16 +246,74 @@ TestDialog::~TestDialog()
 
 bool TestDialog::event(QEvent* event)
 {
-  if (event->type() == TaskEvent::taskEndEventType())
+  if (event->type() == TaskEvent::taskStartEventType())
   {
     auto taskEvent = static_cast<TaskEvent*>(event);
+    auto taskId = taskEvent->taskId();
+    auto taskInfo = taskEvent->taskInfo().toList();
+    auto threadId = taskInfo.size() ? taskInfo.front() : QVariant{};
+    auto taskRange = taskInfo.size() ? taskInfo.back() : QVariant{};
+
+    auto taskStatusModel = _ui->taskStatusTable->model();
+    auto row = taskStatusModel->rowCount();
+
+    _data->saveTaskId(taskId);
+    taskStatusModel->insertRow(row);
+    taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::ID), taskId);
+    taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::THREAD_ID), threadId);
+    taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::INFO), taskRange);
+    taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::PROGRESS), 0.0);
+    taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::RESULT), "");
+
     return true;
   }
   else if (event->type() == TaskEvent::taskProgressEventType())
   {
     auto taskEvent = static_cast<TaskEvent*>(event);
+    auto taskId = taskEvent->taskId();
+    if (_data->isTaskIdSaved(taskId))
+    {
+      auto taskStatusModel = _ui->taskStatusTable->model();
+      auto row = _data->taskIndex(taskId);
+      if (row < taskStatusModel->rowCount())
+        taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::PROGRESS), taskEvent->taskInfo());
+    }
+
     return true;
   }
+  else if (event->type() == TaskEvent::taskEndEventType())
+  {
+    auto taskEvent = static_cast<TaskEvent*>(event);
+    auto taskId = taskEvent->taskId();
+
+    if (_data->isTaskIdSaved(taskId))
+    {
+      auto taskStatusModel = _ui->taskStatusTable->model();
+      auto row = _data->taskIndex(taskId);
+      if (row < taskStatusModel->rowCount())
+      {
+        try
+        {
+          auto taskResult = taskEvent->taskInfo().value<TaskResult<QVariant>>().get();
+          taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::PROGRESS), 1.0);
+          taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::RESULT), taskResult);
+        }
+        catch (const std::runtime_error& e)
+        {
+          QMessageBox::information(this, "Inform", e.what());
+        }
+      }
+      _data->deleteTaskId(taskId);
+      if (!_data->hasSavedTaskIds())
+      {
+        QSignalBlocker signalBlocker{ _ui->startStopBttn };
+        _ui->startStopBttn->setChecked(false);
+      }
+    }
+
+    return true;
+  }
+
   return QDialog::event(event);
 }
 
@@ -218,14 +322,20 @@ void TestDialog::changeArraySize()
   _ui->arraySizeEdit->setText(QString::number(_ui->arraySizeSldr->value()));
 }
 
-void TestDialog::resetArraySize() {}
-
-void TestDialog::applyArraySize() {}
+void TestDialog::applyArraySize()
+{
+  _data->generateArray(_ui->arraySizeSldr->value());
+}
 
 void TestDialog::startStopSorting(bool start)
 {
   if (start)
+  {
+    auto taskStatusModel = _ui->taskStatusTable->model();
+    _data->interrupt();
+    taskStatusModel->removeRows(0, taskStatusModel->rowCount());
     _data->sort();
+  }
   else
     _data->interrupt();
 }

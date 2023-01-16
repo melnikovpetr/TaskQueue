@@ -4,16 +4,38 @@
 
 #include <cassert>
 
-TaskLauncher::TaskLauncher(const TaskEndEventFn& taskEndEventFn, ThreadCount threadCount)
+TaskLauncher::TaskLauncher(ThreadCount threadCount)
   : _taskQueue{ std::make_unique<TaskQueue>() }
   , _taskThreads{ threadCount }
-  , _taskEndEventFn{ taskEndEventFn }
+  , _lastTaskWaiters{ threadCount }
 {
+  for (auto& taskThread : _taskThreads)
+    if (!taskThread.joinable())
+      std::thread{
+        [this]() {
+          if (auto taskQueueLock = _taskQueue->lockPopping())
+            _lastTaskWaiters.insert({ std::this_thread::get_id(), TaskWaiterFn{} });
+          while (true)
+          {
+            auto task{ _taskQueue->pop(_lastTaskWaiters.at(std::this_thread::get_id())) };
+            if (task.taskId == finishTaskId())
+              break;
+            task.taskFn();
+          }
+        }
+      }.swap(taskThread);
 }
 
 TaskLauncher::~TaskLauncher()
 {
-  finish();
+  clear();
+  for (auto& taskThread : _taskThreads)
+    if (taskThread.joinable())
+      queueTask(finishTaskId(), TaskFn{}, TaskWaiterFn{});
+  if (!_taskQueue->isStarted())
+    start();
+  for (auto& taskThread : _taskThreads)
+    taskThread.join();
 }
 
 void TaskLauncher::clear()
@@ -23,34 +45,25 @@ void TaskLauncher::clear()
 
 void TaskLauncher::stop()
 {
-  clear();
-  finish();
+  _taskQueue->stop();
 }
 
-void TaskLauncher::finish()
+void TaskLauncher::stopAndWait(std::atomic<bool>* interruptFlag)
 {
-  for (auto& taskThread : _taskThreads)
-    if (taskThread.joinable())
-      queueTask(finishTaskId(), {});
-  for (auto& taskThread : _taskThreads)
-    taskThread.join();
+  if (auto taskQueueLock = _taskQueue->lockPopping())
+  {
+    _taskQueue->stop();
+    if (interruptFlag)
+      *interruptFlag = true;
+    for (auto& taskWaiter : _lastTaskWaiters)
+      if (taskWaiter.second)
+        taskWaiter.second();
+  }
 }
 
 void TaskLauncher::start()
 {
-  for (auto& taskThread : _taskThreads)
-    if (!taskThread.joinable())
-      std::thread{
-        [this]() {
-          while (true)
-          {
-            auto task{ _taskQueue->pop() };
-            if (task.first == finishTaskId())
-              break;
-            task.second();
-          }
-        }
-      }.swap(taskThread);
+  _taskQueue->start();
 }
 
 ThreadCount TaskLauncher::threadCount() const
@@ -63,9 +76,9 @@ size_t TaskLauncher::taskCount() const
   return _taskQueue->size();
 }
 
-void TaskLauncher::queueTask(TaskId taskId, TaskFn&& taskFn)
+void TaskLauncher::queueTask(TaskId taskId, TaskFn&& taskFn, TaskWaiterFn&& taskWaiterFn)
 {
-  _taskQueue->push({ taskId, taskFn });
+  _taskQueue->push({ taskId, taskFn, taskWaiterFn });
 }
 
 TaskId TaskLauncher::finishTaskId()

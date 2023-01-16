@@ -13,23 +13,24 @@ SpinLock::~SpinLock()
 }
 
 TaskQueue::TaskQueue()
-  : _isBusy{ ATOMIC_FLAG_INIT }
+  : _isBusy{}
   , _queue{}
-  , _started{ false }
+  , _started{ true }
 {
 }
 
-Task TaskQueue::pop()
+Task TaskQueue::pop(TaskWaiterFn& taskWaiterFn)
 {
   Task task{};
-  if (std::unique_lock taskQueueLock{ _taskMutex })
+  if (auto taskQueueLock = lockPopping())
   {
-    _taskCV.wait(taskQueueLock, [this]() { return !isStarted() && size(); });
+    _taskCV.wait(taskQueueLock, [this]() { return isStarted() && size(); });
     {
       SpinLock spinLock{ _isBusy };
       task = std::move(_queue.back());
       _queue.pop_back();
     }
+    taskWaiterFn = task.taskWaiterFn;
   }
   return task;
 }
@@ -45,22 +46,23 @@ void TaskQueue::push(Task&& task)
 
 bool TaskQueue::isStarted() const
 {
-  return _started;
+  return _started.load(std::memory_order_relaxed);
 }
 
 void TaskQueue::stop()
 {
-  _started = false;
+  _started.store(false, std::memory_order_relaxed);
 }
 
 void TaskQueue::start()
 {
-  _started = true;
+  _started.store(true, std::memory_order_seq_cst);
+  _taskCV.notify_all();
 }
 
 void TaskQueue::clear()
 {
-  if (std::unique_lock taskQueueLock{ _taskMutex })
+  if (auto taskQueueLock = lockPopping())
   {
     SpinLock spinLock{ _isBusy };
     _queue.clear();

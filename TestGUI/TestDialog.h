@@ -23,7 +23,6 @@ public:
 
 public Q_SLOTS:
   void changeArraySize();
-  void resetArraySize();
   void applyArraySize();
   void startStopSorting(bool start);
 

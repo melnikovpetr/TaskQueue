@@ -55,3 +55,5 @@ for (auto& taskHandle : taskHandles)
 ```
 ## Tests
 In addition to the library itself, the project contains a demo TestGUI. This program allows you to generate an array of integers and sort its parts, while the parts will be sorted at the same time. The program provides monitoring of the sorting process and the possibility of its interruption. At the end of the procedure, the value range of each sorted part is displayed.
+
+Project build tested on Visual Studio 2019 and gcc 9 (Ubuntu 20.04). To build TestGUI, you need the Qt5 library.

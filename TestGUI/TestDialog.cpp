@@ -6,6 +6,7 @@
 #include <QtGui/QStandardItemModel>
 
 #include <QtWidgets/QMessageBox>
+#include <QtWidgets/QStatusBar>
 
 #include <algorithm>
 #include <cmath>
@@ -129,14 +130,50 @@ public:
     , _array(::minArraySize(_taskLauncher.threadCount()))
     , _interruptFlag{ false }
   {
+    generateArray(_array.size());
   }
 
   ~TestDialogInternal() { _taskLauncher.stopAndWait(&_interruptFlag); }
 
+  auto threadCount() const { return _taskLauncher.threadCount(); }
+
+  auto arraySize() const { return _array.size(); }
+
+  auto saveTask(TaskId taskId)
+  {
+    return _taskIndexes.insert({ taskId, { _taskIndexes.size(), false } }).first->second.first;
+  }
+
+  auto clearTasks() { _taskIndexes.clear(); }
+
+  auto finishTask(TaskId taskId)
+  {
+    auto& taskIndex = _taskIndexes.at(taskId);
+    taskIndex.second = true;
+    return taskIndex.first;
+  }
+
+  auto taskCount() const { return _taskIndexes.size(); }
+
+  auto isTaskSaved(TaskId taskId) const { return _taskIndexes.find(taskId) != _taskIndexes.cend(); }
+
+  auto taskIndex(TaskId taskId) const { return _taskIndexes.at(taskId).first; }
+
+  auto isTaskFinished(TaskId taskId) const { return _taskIndexes.at(taskId).second; }
+
+  auto areAllTasksFinished() const
+  {
+    auto result = taskCount() == threadCount();
+    for (const auto& taskIndex : _taskIndexes)
+      if (!(result = result && taskIndex.second.second))
+        break;
+    return result;
+  }
+
   void sort()
   {
     TaskEndEventFn<QVariant> taskEndEventFn = std::bind(TaskEvent::taskEndEventFn, _self, bind_ph::_1, bind_ph::_2);
-    _taskIndexes.clear();
+    clearTasks();
     _taskLauncher.queueBatch(
       0, _array.size(), 0,
       [this](TaskId taskId, size_t from, size_t to) -> QVariant {
@@ -170,20 +207,6 @@ public:
     _taskLauncher.start();
   }
 
-  ThreadCount threadCount() const { return _taskLauncher.threadCount(); }
-
-  size_t arraySize() const { return _array.size(); }
-
-  void saveTaskId(TaskId taskId) { _taskIndexes.insert({ taskId, _taskIndexes.size() }); }
-
-  void deleteTaskId(TaskId taskId) { _taskIndexes.erase(taskId); }
-
-  auto hasSavedTaskIds() const { return _taskIndexes.size(); }
-
-  auto isTaskIdSaved(TaskId taskId) const { return _taskIndexes.find(taskId) != _taskIndexes.cend(); }
-
-  auto taskIndex(TaskId taskId) const { return _taskIndexes.at(taskId); }
-
   void generateArray(size_t arraySize)
   {
     interrupt();
@@ -204,7 +227,7 @@ private:
   TaskLauncher _taskLauncher;
   Array _array;
   std::atomic<bool> _interruptFlag;
-  std::unordered_map<TaskId, size_t> _taskIndexes;
+  std::unordered_map<TaskId, std::pair<size_t, bool>> _taskIndexes;
 };
 
 // clang-format off
@@ -218,16 +241,23 @@ TestDialog::TestDialog(QWidget* parent)
 {
   _ui->setupUi(this);
 
-  auto taskStatusModel = new QStandardItemModel{ _ui->taskStatusTable };
+  {
+    auto statusBar = new QStatusBar{ this };
+    layout()->addWidget(statusBar);
+    statusBar->showMessage(QString("Thread pool size: %1").arg(_data->threadCount()));
+  }
+  {
+    auto taskStatusModel = new QStandardItemModel{ this };
 
-  taskStatusModel->setColumnCount(TaskStatusCols::_COUNT);
-  taskStatusModel->setHeaderData(TaskStatusCols::ID, Qt::Horizontal, "Id");
-  taskStatusModel->setHeaderData(TaskStatusCols::THREAD_ID, Qt::Horizontal, "Thread Id");
-  taskStatusModel->setHeaderData(TaskStatusCols::INFO, Qt::Horizontal, "Info");
-  taskStatusModel->setHeaderData(TaskStatusCols::PROGRESS, Qt::Horizontal, "Progress");
-  taskStatusModel->setHeaderData(TaskStatusCols::RESULT, Qt::Horizontal, "Result");
+    taskStatusModel->setColumnCount(TaskStatusCols::_COUNT);
+    taskStatusModel->setHeaderData(TaskStatusCols::ID, Qt::Horizontal, "Id");
+    taskStatusModel->setHeaderData(TaskStatusCols::THREAD_ID, Qt::Horizontal, "Thread Id");
+    taskStatusModel->setHeaderData(TaskStatusCols::INFO, Qt::Horizontal, "Array Index Range");
+    taskStatusModel->setHeaderData(TaskStatusCols::PROGRESS, Qt::Horizontal, "Progress");
+    taskStatusModel->setHeaderData(TaskStatusCols::RESULT, Qt::Horizontal, "Result");
 
-  _ui->taskStatusTable->setModel(taskStatusModel);
+    _ui->taskStatusTable->setModel(taskStatusModel);
+  }
 
   connect(_ui->arraySizeSldr, &QSlider::valueChanged, this, &TestDialog::changeArraySize);
   connect(_ui->applyArraySizeBttn, &QPushButton::clicked, this, &TestDialog::applyArraySize);
@@ -255,9 +285,8 @@ bool TestDialog::event(QEvent* event)
     auto taskRange = taskInfo.size() ? taskInfo.back() : QVariant{};
 
     auto taskStatusModel = _ui->taskStatusTable->model();
-    auto row = taskStatusModel->rowCount();
+    auto row = _data->saveTask(taskId);
 
-    _data->saveTaskId(taskId);
     taskStatusModel->insertRow(row);
     taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::ID), taskId);
     taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::THREAD_ID), threadId);
@@ -271,7 +300,7 @@ bool TestDialog::event(QEvent* event)
   {
     auto taskEvent = static_cast<TaskEvent*>(event);
     auto taskId = taskEvent->taskId();
-    if (_data->isTaskIdSaved(taskId))
+    if (_data->isTaskSaved(taskId))
     {
       auto taskStatusModel = _ui->taskStatusTable->model();
       auto row = _data->taskIndex(taskId);
@@ -286,10 +315,10 @@ bool TestDialog::event(QEvent* event)
     auto taskEvent = static_cast<TaskEvent*>(event);
     auto taskId = taskEvent->taskId();
 
-    if (_data->isTaskIdSaved(taskId))
+    if (_data->isTaskSaved(taskId))
     {
       auto taskStatusModel = _ui->taskStatusTable->model();
-      auto row = _data->taskIndex(taskId);
+      auto row = _data->finishTask(taskId);
       if (row < taskStatusModel->rowCount())
       {
         try
@@ -300,11 +329,10 @@ bool TestDialog::event(QEvent* event)
         }
         catch (const std::runtime_error& e)
         {
-          QMessageBox::information(this, "Inform", e.what());
+          taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::RESULT), e.what());
         }
       }
-      _data->deleteTaskId(taskId);
-      if (!_data->hasSavedTaskIds())
+      if (!_data->areAllTasksFinished())
       {
         QSignalBlocker signalBlocker{ _ui->startStopBttn };
         _ui->startStopBttn->setChecked(false);
@@ -324,6 +352,10 @@ void TestDialog::changeArraySize()
 
 void TestDialog::applyArraySize()
 {
+  QMessageBox msgBox(QMessageBox::Warning, "Array generation, please wait!", "", QMessageBox::NoButton, this);
+  // msgBox.setModal(false);
+  msgBox.show();
+  QCoreApplication::processEvents();
   _data->generateArray(_ui->arraySizeSldr->value());
 }
 

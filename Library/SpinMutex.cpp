@@ -1,5 +1,7 @@
 #include "SpinMutex.h"
 
+#include <immintrin.h>
+
 void SpinMutex::lock() noexcept
 {
   while (_spin.exchange(true, std::memory_order_acquire))

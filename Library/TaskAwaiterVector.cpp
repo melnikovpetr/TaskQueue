@@ -13,7 +13,7 @@ void TaskAwaiterVector::set(size_t awaiterIndex, const TaskAwaiter& awaiter)
   TaskAwaiter awaiterCopy{ awaiter };
   {
     std::unique_lock spinLock{ _isBusy };
-    _vector[awaiterIndex].swap(std::move(awaiterCopy));
+    _vector[awaiterIndex].swap(awaiterCopy);
   }
 }
 

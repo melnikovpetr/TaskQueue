@@ -40,7 +40,7 @@ static size_t availableSystemMemory()
 static size_t operCount(size_t arraySize)
 {
   assert(arraySize > 0);
-  return 2 * arraySize * std::log(arraySize);
+  return 3 * arraySize * std::log(arraySize);
 }
 
 static size_t minArraySize(ThreadCount threadCount)
@@ -91,8 +91,7 @@ public:
   {
     QVariant thrdId = QString::fromStdString(::threadIdToStr(threadId));
     QVariant taskRange = "[" + QString::number(from) + ", " + QString::number(to) + ")";
-    QCoreApplication::postEvent(
-      reseiver, new TaskEvent{ taskStartEventType(), taskId, QVariantList{ thrdId, taskRange } });
+    QCoreApplication::postEvent(reseiver, new TaskEvent{ taskStartEventType(), taskId, QVariantList{ thrdId, taskRange } });
   }
 
   static void taskProgressEventFn(QObject* reseiver, TaskId taskId, double taskProgress)
@@ -139,10 +138,7 @@ public:
 
   auto arraySize() const { return _array.size(); }
 
-  auto saveTask(TaskId taskId)
-  {
-    return _taskIndexes.insert({ taskId, { _taskIndexes.size(), false } }).first->second.first;
-  }
+  auto saveTask(TaskId taskId) { return _taskIndexes.insert({ taskId, { _taskIndexes.size(), false } }).first->second.first; }
 
   auto clearTasks() { _taskIndexes.clear(); }
 
@@ -176,16 +172,17 @@ public:
     clearTasks();
     _taskLauncher.queueBatch(
       0, _array.size(), 0,
-      [this](TaskId taskId, size_t from, size_t to) -> QVariant {
+      [this](TaskId taskId, size_t from, size_t to) -> QVariant
+      {
         auto threadOperIndex = size_t(0);
         auto threadOperCount = ::operCount(to - from);
         auto progressGrain = ::progressGrain(threadOperCount);
-        auto threadCmpPred = [this, taskId, &threadOperIndex, threadOperCount, progressGrain](
-                               const ArrayValue& l, const ArrayValue& r) mutable -> bool {
+        auto threadCmpPred = [this, taskId, &threadOperIndex, threadOperCount, progressGrain](const ArrayValue& l, const ArrayValue& r) mutable -> bool
+        {
           if (threadOperIndex && !(threadOperIndex % progressGrain))
           {
             auto progress = static_cast<double>(threadOperIndex) / threadOperCount;
-            TaskEvent::taskProgressEventFn(_self, taskId, progress >= 1.0 ? 0.99 : progress);
+            TaskEvent::taskProgressEventFn(_self, taskId, progress >= 0.99 ? 0.99 : progress);
             if (_interruptFlag)
               throw std::runtime_error("Task with id = " + std::to_string(taskId) + " was interrupted!");
           }
@@ -211,13 +208,15 @@ public:
   {
     interrupt();
     _array.resize(arraySize);
-    auto taskHandles = _taskLauncher.queueBatch(0, _array.size(), 0, [this](TaskId taskId, size_t from, size_t to) {
-      std::uniform_int_distribution<int> distribution(0, _array.size() - 1);
-      std::mt19937 randomEngine{ std::random_device{}() };
-      auto random = std::bind(distribution, randomEngine);
-      for (auto index = from; index < to; ++index)
-        _array[index] = random();
-    });
+    auto taskHandles = _taskLauncher.queueBatch(0, _array.size(), 0,
+      [this](TaskId taskId, size_t from, size_t to)
+      {
+        std::uniform_int_distribution<int> distribution(0, _array.size() - 1);
+        std::mt19937 randomEngine{ std::random_device{}() };
+        auto random = std::bind(distribution, randomEngine);
+        for (auto index = from; index < to; ++index)
+          _array[index] = random();
+      });
     for (auto& taskHandle : taskHandles)
       taskHandle.result.wait();
   }
@@ -352,7 +351,7 @@ void TestDialog::changeArraySize()
 
 void TestDialog::applyArraySize()
 {
-  QMessageBox msgBox(QMessageBox::Warning, "Array generation, please wait!", "", QMessageBox::NoButton, this);
+  QMessageBox msgBox(QMessageBox::Warning, "Please wait! Array generation!", "", QMessageBox::NoButton, this);
   // msgBox.setModal(false);
   msgBox.show();
   QCoreApplication::processEvents();

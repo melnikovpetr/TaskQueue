@@ -11,13 +11,14 @@
 using ThreadCount = decltype(std::thread::hardware_concurrency());
 
 class TaskQueue;
+class TaskAwaiterVector;
 
 using TaskId = long long;
 
-template<typename TResult>
+template <typename TResult>
 using TaskResult = std::shared_future<TResult>;
 
-template<typename TResult>
+template <typename TResult>
 struct TaskHandle
 {
   TaskId id;
@@ -25,9 +26,9 @@ struct TaskHandle
 };
 
 using TaskFn = std::function<void(void)>;
-using TaskWaiterFn = std::function<void(void)>;
+using TaskAwaiter = std::function<void(void)>;
 
-template<typename TResult>
+template <typename TResult>
 using TaskEndEventFn = std::function<void(TaskId, const TaskResult<TResult>&)>;
 
 class TASKQUEUE_EXPORT TaskLauncher
@@ -36,23 +37,23 @@ public:
   TaskLauncher(ThreadCount threadCount = std::thread::hardware_concurrency());
   ~TaskLauncher();
 
-  template<typename TFn, typename... TArgs, typename TResult = std::invoke_result_t<TFn, TaskId, TArgs...>>
+  template <typename TFn, typename... TArgs, typename TResult = std::invoke_result_t<TFn, TaskId, TArgs...>>
   TaskHandle<TResult> queueTask(TFn&& fn, TArgs&&... args)
   {
     return queueTask(TaskEndEventFn<TResult>{}, std::forward<TFn>(fn), std::forward<TArgs>(args)...);
   }
 
-  template<typename TFn, typename... TArgs, typename TResult = std::invoke_result_t<TFn, TaskId, TArgs...>>
+  template <typename TFn, typename... TArgs, typename TResult = std::invoke_result_t<TFn, TaskId, TArgs...>>
   TaskHandle<TResult> queueTask(const TaskEndEventFn<TResult>& taskEndEventFn, TFn&& fn, TArgs&&... args)
   {
     auto taskId = generateTaskId();
-    auto task = std::make_shared<std::packaged_task<TResult()>>(
-      std::bind(std::forward<TFn>(fn), taskId, std::forward<TArgs>(args)...));
+    auto task = std::make_shared<std::packaged_task<TResult()>>(std::bind(std::forward<TFn>(fn), taskId, std::forward<TArgs>(args)...));
     TaskHandle<TResult> taskHandle{ taskId, task->get_future().share() };
 
     queueTask(
       taskHandle.id,
-      [task, taskHandle, taskEndEventFn]() {
+      [task, taskHandle, taskEndEventFn]()
+      {
         task->operator()();
         if (taskEndEventFn)
           taskEndEventFn(taskHandle.id, taskHandle.result);
@@ -61,9 +62,8 @@ public:
     return taskHandle;
   }
 
-  template<typename TFn, typename TResult = std::invoke_result_t<TFn, TaskId, size_t, size_t>>
-  std::vector<TaskHandle<TResult>> queueBatch(
-    size_t first, size_t last, size_t grain, TFn&& fn, const TaskEndEventFn<TResult>& taskEndEventFn = {})
+  template <typename TFn, typename TResult = std::invoke_result_t<TFn, TaskId, size_t, size_t>>
+  std::vector<TaskHandle<TResult>> queueBatch(size_t first, size_t last, size_t grain, TFn&& fn, const TaskEndEventFn<TResult>& taskEndEventFn = {})
   {
     std::vector<TaskHandle<TResult>> taskHandles{};
     auto count = last - first;
@@ -87,24 +87,25 @@ public:
     return taskHandles;
   }
 
-  void clear();
-  void stop();
+  void clear() noexcept;
+  void stop() noexcept;
   void stopAndWait(std::atomic<bool>* interruptFlag = nullptr);
   void start();
-  ThreadCount threadCount() const;
-  size_t taskCount() const;
+  ThreadCount threadCount() const noexcept;
+  size_t taskCount() const noexcept;
 
 protected:
-  static TaskId generateTaskId();
-  static TaskId finishTaskId();
+  static TaskId generateTaskId() noexcept;
+  static TaskId finishTaskId() noexcept;
 
 protected:
-  void queueTask(TaskId taskId, TaskFn&& taskFn, TaskWaiterFn&& taskWaiterFn);
+  void queueTask(TaskId taskId, TaskFn&& taskFn, TaskAwaiter&& taskAwaiter);
 
 private:
   std::unique_ptr<TaskQueue> _taskQueue;
   std::vector<std::thread> _taskThreads;
-  std::unordered_map<std::thread::id, TaskWaiterFn> _lastTaskWaiters;
+  std::unique_ptr<TaskAwaiterVector> _taskAwaiterVector;
+  std::mutex _stopStartMutex;
 };
 
 #endif // TASK_LAUNCHER_H

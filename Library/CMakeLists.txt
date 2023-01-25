@@ -1,11 +1,15 @@
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 set(SOURCES
+  SpinMutex.cpp
+  TaskAwaiterVector.cpp
   TaskLauncher.cpp
   TaskQueue.cpp)
 source_group(Sources FILES ${SOURCES})
 
 set(HEADERS
+  SpinMutex.h
+  TaskAwaiterVector.h
   TaskQueue.h
   TaskLauncher.h)
 source_group(Headers FILES ${HEADERS})

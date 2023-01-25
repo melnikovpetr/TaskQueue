@@ -1,5 +1,6 @@
 #include "TaskLauncher.h"
 
+#include "TaskAwaiterVector.h"
 #include "TaskQueue.h"
 
 #include <cassert>
@@ -7,87 +8,91 @@
 TaskLauncher::TaskLauncher(ThreadCount threadCount)
   : _taskQueue{ std::make_unique<TaskQueue>() }
   , _taskThreads{ threadCount }
-  , _lastTaskWaiters{ threadCount }
+  , _taskAwaiterVector{ std::make_unique<TaskAwaiterVector>(threadCount) }
+  , _stopStartMutex{}
 {
-  for (auto& taskThread : _taskThreads)
-    if (!taskThread.joinable())
+
+  for (size_t threadIndex = 0; threadIndex < _taskThreads.size(); ++threadIndex)
+    if (!_taskThreads[threadIndex].joinable())
       std::thread{
-        [this]() {
-          if (auto taskQueueLock = _taskQueue->lockPopping())
-            _lastTaskWaiters.insert({ std::this_thread::get_id(), TaskWaiterFn{} });
+        [this, threadIndex]()
+        {
           while (true)
           {
-            auto task{ _taskQueue->pop(_lastTaskWaiters.at(std::this_thread::get_id())) };
+            auto task{ _taskQueue->pop() };
             if (task.taskId == finishTaskId())
               break;
+            _taskAwaiterVector->set(threadIndex, task.taskAwaiter);
             task.taskFn();
+            _taskAwaiterVector->clear(threadIndex);
           }
         }
-      }.swap(taskThread);
+      }.swap(_taskThreads[threadIndex]);
 }
 
 TaskLauncher::~TaskLauncher()
 {
-  clear();
+  std::unique_lock stopStartLock{ _stopStartMutex };
+  _taskQueue->clear();
   for (auto& taskThread : _taskThreads)
     if (taskThread.joinable())
-      queueTask(finishTaskId(), TaskFn{}, TaskWaiterFn{});
+      queueTask(finishTaskId(), TaskFn{}, TaskAwaiter{});
   if (!_taskQueue->isStarted())
-    start();
+    _taskQueue->start();
   for (auto& taskThread : _taskThreads)
-    taskThread.join();
+    if (taskThread.joinable())
+      taskThread.join();
 }
 
-void TaskLauncher::clear()
+void TaskLauncher::clear() noexcept
 {
   _taskQueue->clear();
 }
 
-void TaskLauncher::stop()
+void TaskLauncher::stop() noexcept
 {
   _taskQueue->stop();
 }
 
 void TaskLauncher::stopAndWait(std::atomic<bool>* interruptFlag)
 {
-  if (auto taskQueueLock = _taskQueue->lockPopping())
   {
+    std::unique_lock stopStartLock{ _stopStartMutex };
     _taskQueue->stop();
     if (interruptFlag)
       *interruptFlag = true;
-    for (auto& taskWaiter : _lastTaskWaiters)
-      if (taskWaiter.second)
-        taskWaiter.second();
+    _taskAwaiterVector->wait();
   }
 }
 
 void TaskLauncher::start()
 {
+  std::unique_lock stopStartLock{ _stopStartMutex };
   _taskQueue->start();
 }
 
-ThreadCount TaskLauncher::threadCount() const
+ThreadCount TaskLauncher::threadCount() const noexcept
 {
   return _taskThreads.size();
 }
 
-size_t TaskLauncher::taskCount() const
+size_t TaskLauncher::taskCount() const noexcept
 {
   return _taskQueue->size();
 }
 
-void TaskLauncher::queueTask(TaskId taskId, TaskFn&& taskFn, TaskWaiterFn&& taskWaiterFn)
+void TaskLauncher::queueTask(TaskId taskId, TaskFn&& taskFn, TaskAwaiter&& taskAwaiter)
 {
-  _taskQueue->push({ taskId, taskFn, taskWaiterFn });
+  _taskQueue->push({ taskId, taskFn, taskAwaiter });
 }
 
-TaskId TaskLauncher::finishTaskId()
+TaskId TaskLauncher::finishTaskId() noexcept
 {
   static auto taskId = generateTaskId();
   return taskId;
 }
 
-TaskId TaskLauncher::generateTaskId()
+TaskId TaskLauncher::generateTaskId() noexcept
 {
   return std::chrono::steady_clock::now().time_since_epoch().count();
 }

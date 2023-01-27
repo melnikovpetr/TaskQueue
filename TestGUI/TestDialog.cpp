@@ -3,6 +3,7 @@
 
 #include <TaskLauncher.h>
 
+#include <QtGui/QScreen>
 #include <QtGui/QStandardItemModel>
 
 #include <QtWidgets/QMessageBox>
@@ -20,6 +21,10 @@ using ThreadId = std::thread::id;
 
 Q_DECLARE_METATYPE(TaskResult<QVariant>)
 
+#define PROP_MIN_ARR_SZ "MIN_ARRAY_SIZE"
+#define PROP_MAX_ARR_SZ "MAX_ARRAY_SIZE"
+#define PROP_ARR_SZ "ARRAY_SIZE"
+
 #ifdef WIN32
 #include <windows.h>
 static size_t availableSystemMemory()
@@ -30,17 +35,33 @@ static size_t availableSystemMemory()
   return statex.ullAvailPhys;
 }
 #else
-#include <unistd.h>
+//#include <unistd.h>
+// static size_t availableSystemMemory()
+//{
+//  return ::sysconf(_SC_PAGE_SIZE) * ::sysconf(_SC_AVPHYS_PAGES);
+//}
+#include <fstream>
 static size_t availableSystemMemory()
 {
-  return ::sysconf(_SC_PAGE_SIZE) * ::sysconf(_SC_AVPHYS_PAGES);
+  std::string title{};
+  size_t value{ 0 };
+  std::string units{};
+  std::ifstream file{ "/proc/meminfo" };
+  while (file >> title)
+  {
+    if (title == "MemAvailable:")
+      return (file >> value) ? ((file >> units) ? (units == "kB" ? value * 1024 : 0) : 0) : 0;
+    // Ignore the rest of the line
+    file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  }
+  return 0; // Nothing found
 }
 #endif
 
 static size_t operCount(size_t arraySize)
 {
   assert(arraySize > 0);
-  return 3 * arraySize * std::log(arraySize);
+  return 2 * arraySize * std::log(arraySize);
 }
 
 static size_t minArraySize(ThreadCount threadCount)
@@ -51,7 +72,13 @@ static size_t minArraySize(ThreadCount threadCount)
 
 static size_t maxArraySize()
 {
-  return availableSystemMemory() / (sizeof(ArrayValue) * 2);
+  return 0.8 * availableSystemMemory() / sizeof(ArrayValue); // 80% of available memory
+}
+
+template <typename T1, typename T2>
+static T2 scaleToAnotherRange(T1 r1Min, T1 r1Max, T1 r1Value, T2 r2Min, T2 r2Max)
+{
+  return r2Min + (r2Max - r2Min) * (static_cast<double>(r1Value - r1Min) / (r1Max - r1Min));
 }
 
 static std::string threadIdToStr(ThreadId threadId)
@@ -172,13 +199,11 @@ public:
     clearTasks();
     _taskLauncher.queueBatch(
       0, _array.size(), 0,
-      [this](TaskId taskId, size_t from, size_t to) -> QVariant
-      {
+      [this](TaskId taskId, size_t from, size_t to) -> QVariant {
         auto threadOperIndex = size_t(0);
         auto threadOperCount = ::operCount(to - from);
         auto progressGrain = ::progressGrain(threadOperCount);
-        auto threadCmpPred = [this, taskId, &threadOperIndex, threadOperCount, progressGrain](const ArrayValue& l, const ArrayValue& r) mutable -> bool
-        {
+        auto threadCmpPred = [this, taskId, &threadOperIndex, threadOperCount, progressGrain](const ArrayValue& l, const ArrayValue& r) mutable -> bool {
           if (threadOperIndex && !(threadOperIndex % progressGrain))
           {
             auto progress = static_cast<double>(threadOperIndex) / threadOperCount;
@@ -207,16 +232,15 @@ public:
   void generateArray(size_t arraySize)
   {
     interrupt();
+    decltype(_array){}.swap(_array);
     _array.resize(arraySize);
-    auto taskHandles = _taskLauncher.queueBatch(0, _array.size(), 0,
-      [this](TaskId taskId, size_t from, size_t to)
-      {
-        std::uniform_int_distribution<int> distribution(0, _array.size() - 1);
-        std::mt19937 randomEngine{ std::random_device{}() };
-        auto random = std::bind(distribution, randomEngine);
-        for (auto index = from; index < to; ++index)
-          _array[index] = random();
-      });
+    auto taskHandles = _taskLauncher.queueBatch(0, _array.size(), 0, [this](TaskId taskId, size_t from, size_t to) {
+      std::uniform_int_distribution<ArrayValue> distribution(0, std::numeric_limits<ArrayValue>::max());
+      std::mt19937 randomEngine{ std::random_device{}() };
+      auto random = std::bind(distribution, randomEngine);
+      for (auto index = from; index < to; ++index)
+        _array[index] = random();
+    });
     for (auto& taskHandle : taskHandles)
       taskHandle.result.wait();
   }
@@ -258,13 +282,26 @@ TestDialog::TestDialog(QWidget* parent)
     _ui->taskStatusTable->setModel(taskStatusModel);
   }
 
+  auto minArraySize = ::minArraySize(_data->threadCount());
+  _ui->arraySizeSldr->setProperty(PROP_MIN_ARR_SZ, QVariant::fromValue(minArraySize));
+  _ui->arraySizeSldr->setMinimum(0);
+
+  auto maxArraySize = ::maxArraySize();
+  _ui->arraySizeSldr->setProperty(PROP_MAX_ARR_SZ, maxArraySize ? QVariant::fromValue(maxArraySize) : _ui->arraySizeSldr->property(PROP_MIN_ARR_SZ));
+  _ui->arraySizeSldr->setMaximum(maxArraySize ? QGuiApplication::primaryScreen()->size().width() : _ui->arraySizeSldr->minimum());
+
+  if (!maxArraySize)
+    QMessageBox::warning(nullptr, "Warning!", "Can't determine maximum array size!");
+
+  _ui->arraySizeSldr->setValue(
+    ::scaleToAnotherRange(minArraySize, maxArraySize, _data->arraySize(), _ui->arraySizeSldr->minimum(), _ui->arraySizeSldr->maximum()));
+
+  _ui->arraySizeEdit->setProperty(PROP_ARR_SZ, QVariant::fromValue(_data->arraySize()));
+  _ui->arraySizeEdit->setText(_ui->arraySizeEdit->property(PROP_ARR_SZ).toString());
+
   connect(_ui->arraySizeSldr, &QSlider::valueChanged, this, &TestDialog::changeArraySize);
   connect(_ui->applyArraySizeBttn, &QPushButton::clicked, this, &TestDialog::applyArraySize);
   connect(_ui->startStopBttn, &QPushButton::toggled, this, &TestDialog::startStopSorting);
-
-  _ui->arraySizeSldr->setMinimum(::minArraySize(_data->threadCount()));
-  _ui->arraySizeSldr->setMaximum(::maxArraySize());
-  _ui->arraySizeSldr->setValue(_data->arraySize());
 }
 
 TestDialog::~TestDialog()
@@ -293,6 +330,8 @@ bool TestDialog::event(QEvent* event)
     taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::PROGRESS), 0.0);
     taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::RESULT), "");
 
+    _ui->taskStatusTable->resizeColumnsToContents();
+
     return true;
   }
   else if (event->type() == TaskEvent::taskProgressEventType())
@@ -304,7 +343,11 @@ bool TestDialog::event(QEvent* event)
       auto taskStatusModel = _ui->taskStatusTable->model();
       auto row = _data->taskIndex(taskId);
       if (row < taskStatusModel->rowCount())
+      {
         taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::PROGRESS), taskEvent->taskInfo());
+
+        _ui->taskStatusTable->resizeColumnsToContents();
+      }
     }
 
     return true;
@@ -330,6 +373,8 @@ bool TestDialog::event(QEvent* event)
         {
           taskStatusModel->setData(taskStatusModel->index(row, TaskStatusCols::RESULT), e.what());
         }
+
+        _ui->taskStatusTable->resizeColumnsToContents();
       }
       if (!_data->areAllTasksFinished())
       {
@@ -346,7 +391,10 @@ bool TestDialog::event(QEvent* event)
 
 void TestDialog::changeArraySize()
 {
-  _ui->arraySizeEdit->setText(QString::number(_ui->arraySizeSldr->value()));
+  _ui->arraySizeEdit->setProperty(PROP_ARR_SZ,
+    QVariant::fromValue(::scaleToAnotherRange(_ui->arraySizeSldr->minimum(), _ui->arraySizeSldr->maximum(), _ui->arraySizeSldr->value(),
+      _ui->arraySizeSldr->property(PROP_MIN_ARR_SZ).value<size_t>(), _ui->arraySizeSldr->property(PROP_MAX_ARR_SZ).value<size_t>())));
+  _ui->arraySizeEdit->setText(_ui->arraySizeEdit->property(PROP_ARR_SZ).toString());
 }
 
 void TestDialog::applyArraySize()
@@ -355,7 +403,7 @@ void TestDialog::applyArraySize()
   // msgBox.setModal(false);
   msgBox.show();
   QCoreApplication::processEvents();
-  _data->generateArray(_ui->arraySizeSldr->value());
+  _data->generateArray(_ui->arraySizeEdit->property(PROP_ARR_SZ).value<size_t>());
 }
 
 void TestDialog::startStopSorting(bool start)

@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <vector>
 
 using TaskId = long long;
 using TaskFn = std::function<void(void)>;
@@ -24,6 +25,7 @@ public:
   TaskQueue();
   Task pop();
   void push(Task&& task);
+  void clearAndPush(std::vector<Task>&& tasks);
   bool isStarted() const noexcept;
   void stop() noexcept;
   void start() noexcept;

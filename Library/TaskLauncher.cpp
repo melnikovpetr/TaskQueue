@@ -32,16 +32,16 @@ TaskLauncher::TaskLauncher(ThreadCount threadCount)
 
 TaskLauncher::~TaskLauncher()
 {
-  std::unique_lock stopStartLock{ _stopStartMutex };
-  _taskQueue->clear();
-  for (auto& taskThread : _taskThreads)
-    if (taskThread.joinable())
-      queueTask(finishTaskId(), TaskFn{}, TaskAwaiter{});
-  if (!_taskQueue->isStarted())
-    _taskQueue->start();
-  for (auto& taskThread : _taskThreads)
-    if (taskThread.joinable())
-      taskThread.join();
+  std::vector finishTasks(threadCount(), Task{ finishTaskId(), TaskFn{}, TaskAwaiter{} });
+  {
+    std::unique_lock stopStartLock{ _stopStartMutex };
+    _taskQueue->clearAndPush(std::move(finishTasks));
+    if (!_taskQueue->isStarted())
+      _taskQueue->start();
+    for (auto& taskThread : _taskThreads)
+      if (taskThread.joinable())
+        taskThread.join();
+  }
 }
 
 void TaskLauncher::clear() noexcept
@@ -51,6 +51,7 @@ void TaskLauncher::clear() noexcept
 
 void TaskLauncher::stop() noexcept
 {
+  std::unique_lock stopStartLock{ _stopStartMutex }; // prevents stopping during launcher destruction
   _taskQueue->stop();
 }
 

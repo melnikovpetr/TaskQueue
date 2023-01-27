@@ -29,9 +29,19 @@ void TaskQueue::push(Task&& task)
   _taskCV.notify_one();
 }
 
+void TaskQueue::clearAndPush(std::vector<Task>&& tasks)
+{
+  {
+    std::unique_lock spinLock{ _isBusy };
+    for (auto& task : tasks)
+      _queue.push_back(std::move(task));
+  }
+  _taskCV.notify_all();
+}
+
 bool TaskQueue::isStarted() const noexcept
 {
-  return _started.load(std::memory_order_relaxed);
+  return _started.load(std::memory_order_acquire);
 }
 
 void TaskQueue::stop() noexcept
@@ -41,7 +51,7 @@ void TaskQueue::stop() noexcept
 
 void TaskQueue::start() noexcept
 {
-  _started.store(true, std::memory_order_seq_cst);
+  _started.store(true, std::memory_order_release);
   _taskCV.notify_all();
 }
 

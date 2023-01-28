@@ -199,11 +199,13 @@ public:
     clearTasks();
     _taskLauncher.queueBatch(
       0, _array.size(), 0,
-      [this](TaskId taskId, size_t from, size_t to) -> QVariant {
+      [this](TaskId taskId, size_t from, size_t to) -> QVariant
+      {
         auto threadOperIndex = size_t(0);
         auto threadOperCount = ::operCount(to - from);
         auto progressGrain = ::progressGrain(threadOperCount);
-        auto threadCmpPred = [this, taskId, &threadOperIndex, threadOperCount, progressGrain](const ArrayValue& l, const ArrayValue& r) mutable -> bool {
+        auto threadCmpPred = [this, taskId, &threadOperIndex, threadOperCount, progressGrain](const ArrayValue& l, const ArrayValue& r) mutable -> bool
+        {
           if (threadOperIndex && !(threadOperIndex % progressGrain))
           {
             auto progress = static_cast<double>(threadOperIndex) / threadOperCount;
@@ -234,13 +236,15 @@ public:
     interrupt();
     decltype(_array){}.swap(_array);
     _array.resize(arraySize);
-    auto taskHandles = _taskLauncher.queueBatch(0, _array.size(), 0, [this](TaskId taskId, size_t from, size_t to) {
-      std::uniform_int_distribution<ArrayValue> distribution(0, std::numeric_limits<ArrayValue>::max());
-      std::mt19937 randomEngine{ std::random_device{}() };
-      auto random = std::bind(distribution, randomEngine);
-      for (auto index = from; index < to; ++index)
-        _array[index] = random();
-    });
+    auto taskHandles = _taskLauncher.queueBatch(0, _array.size(), 0,
+      [this](TaskId taskId, size_t from, size_t to)
+      {
+        std::uniform_int_distribution<ArrayValue> distribution(0, (std::numeric_limits<ArrayValue>::max)());
+        std::mt19937 randomEngine{ std::random_device{}() };
+        auto random = std::bind(distribution, randomEngine);
+        for (auto index = from; index < to; ++index)
+          _array[index] = random();
+      });
     for (auto& taskHandle : taskHandles)
       taskHandle.result.wait();
   }

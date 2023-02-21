@@ -19,11 +19,17 @@ endif ()
 add_subdirectory(Library)
 
 option(TEST_GUI "Build tests with gui" ON)
+option(TEST_CONSOLE "Build console tests" ON)
+
+if (TEST_GUI OR TEST_CONSOLE)
+  add_subdirectory(TestCore)
+endif()
+
 if (TEST_GUI)
   add_subdirectory(TestGUI)
 endif()
 
-option(TEST_CONSOLE "Build console tests" ON)
+
 if (TEST_CONSOLE)
   add_subdirectory(TestConsole)
 endif()

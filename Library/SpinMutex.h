@@ -1,9 +1,11 @@
 #ifndef SPIN_MUTEX_H
 #define SPIN_MUTEX_H
 
+#include "TaskQueueExport.h"
+
 #include <atomic>
 
-class SpinMutex
+class TASKQUEUE_EXPORT SpinMutex
 {
 public:
   SpinMutex() noexcept = default;

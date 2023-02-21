@@ -57,18 +57,12 @@ void TaskQueue::start() noexcept
 
 void TaskQueue::clear() noexcept
 {
-  {
-    std::unique_lock spinLock{ _isBusy };
-    _queue.clear();
-  }
+  std::unique_lock spinLock{ _isBusy };
+  _queue.clear();
 }
 
 size_t TaskQueue::size() const noexcept
 {
-  size_t result{};
-  {
-    std::unique_lock spinLock{ _isBusy };
-    result = _queue.size();
-  }
-  return result;
+  std::unique_lock spinLock{ _isBusy };
+  return _queue.size();
 }

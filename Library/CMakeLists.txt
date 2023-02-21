@@ -11,7 +11,8 @@ set(HEADERS
   SpinMutex.h
   TaskAwaiterVector.h
   TaskQueue.h
-  TaskLauncher.h)
+  TaskLauncher.h
+  ThreadSafeQueue.h)
 source_group(Headers FILES ${HEADERS})
 
 set(PRIVATE_LINK_LIBS

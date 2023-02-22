@@ -7,14 +7,14 @@
 
 #include <ArraySort.h>
 
-class MainWidget : public ComposedWidget
+class TestWidget : public ComposedWidget
 {
   // clang-format off
   enum : size_t { TLI_ID, TLI_THREAD_ID, TLI_INFO, TLI_PROGRESS, TLI_RESULT, _TLI_COUNT };
   enum : size_t { SI_THREAD_POOL, SI_ARRAY, _SI_COUNT };
   // clang-format on
 public:
-  MainWidget();
+  TestWidget();
 
   void draw() override;
 
@@ -25,7 +25,7 @@ protected:
   void startStop();
   void setArraySize(const std::string& value);
 
-private:
+public:
   TableModel _taskLauncherInfo;
   TableModel _sizesInfo;
   ArraySort _arraySort;

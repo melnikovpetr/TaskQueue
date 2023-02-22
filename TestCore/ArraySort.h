@@ -3,6 +3,7 @@
 
 #include <TaskLauncher.h>
 
+#include <cmath>
 #include <unordered_map>
 #include <vector>
 

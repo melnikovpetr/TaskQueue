@@ -12,7 +12,7 @@ using WidgetChildren = std::vector<std::unique_ptr<Widget>>;
 using WidgetIt = WidgetChildren::iterator;
 using WidgetCIt = WidgetChildren::const_iterator;
 // clang-format off
-struct _WidgetInput { enum WidgetInput : char { NO_INPUT, ESC = 27, ENTER = 13, REFRESH = 18, BACK = 8 }; };
+struct _WidgetInput { enum WidgetInput : char { NO_INPUT, ESC = 27, ENTER = 13, RETURN = 10, REFRESH = 18, BACK = 8, DEL = 127 }; };
 // clang-format on
 using WidgetInput = _WidgetInput::WidgetInput;
 
@@ -156,9 +156,9 @@ class ActionWidget : public Widget
 {
 public:
   using Handler = std::function<void(void)>;
-  using ActionData = std::pair<std::string, Handler>;
-  using Action = std::pair<char, ActionData>;
-  using Actions = std::map<Action::first_type, Action::second_type>;
+  using Action = std::tuple<char, std::string, Handler>;
+  using Actions = std::vector<Action>;
+  using ActionIndexes = std::map<char, size_t>;
 
 public:
   ActionWidget(const std::string& name, const std::string& title, Actions&& actions);
@@ -168,7 +168,8 @@ public:
 
 private:
   std::string _title;
-  const Actions _actions;
+  Actions _actions;
+  ActionIndexes _indexes;
 };
 
 #endif // WIDGET_H

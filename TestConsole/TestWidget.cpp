@@ -48,7 +48,7 @@ struct Event
   static void postProgress(TaskId taskId, double progress) { post({ taskId, { progress } }); }
 };
 
-MainWidget::MainWidget()
+TestWidget::TestWidget()
   : ComposedWidget(WN_MAIN)
   , _taskLauncherInfo{ { "Id", "Thread Id", "Array Index Range", "Progress", "Result" } }
   , _sizesInfo{ { "Thread Pool Size", "Array Size" } }
@@ -62,14 +62,13 @@ MainWidget::MainWidget()
   pushChild(createWidget(WN_CMD));
 }
 
-void MainWidget::draw()
+void TestWidget::draw()
 {
-  Event event{};
-
   _sizesInfo.setData(0, SI_THREAD_POOL, std::to_string(_arraySort.threadCount()));
   _sizesInfo.setData(0, SI_ARRAY, std::to_string(_arraySort.arraySize()));
   childWidget<TableWidget>(WN_SZ_INFO)->adjustWidth();
 
+  Event event{};
   while (Event::get(event))
   {
     if (std::holds_alternative<SortTaskInfo>(event.info))
@@ -121,11 +120,21 @@ void MainWidget::draw()
     }
   }
 
+  std::ostringstream local{};
+  auto coutBuff = std::cout.rdbuf();
+  std::cout.rdbuf(local.rdbuf());
+
   Keyboard::clearConsole();
   ComposedWidget::draw();
+
+  std::cout << std::flush;
+  std::cout.rdbuf(coutBuff);
+
+  std::printf("%s", local.str().c_str());
+  std::fflush(stdout);
 }
 
-std::unique_ptr<Widget> MainWidget::createWidget(const std::string& name)
+std::unique_ptr<Widget> TestWidget::createWidget(const std::string& name)
 {
   if (name == WN_TITLE)
     return std::make_unique<InfoWidget>(name, "Test console\n\n");
@@ -135,26 +144,26 @@ std::unique_ptr<Widget> MainWidget::createWidget(const std::string& name)
     return std::make_unique<TableWidget>(name, "Running Tasks", &_taskLauncherInfo);
   else if (name == WN_CMD)
     return std::make_unique<ActionWidget>(name, "Type:",
-      ActionWidget::Actions{ { '1', { "To resize and generate input array", std::bind(&MainWidget::readArraySize, this) } },
-        { '2', { "To start/stop sorting", std::bind(&MainWidget::startStop, this) } }, { WidgetInput::ESC, { "To exit", {} } } });
+      ActionWidget::Actions{ { '1', "To resize and generate input array", std::bind(&TestWidget::readArraySize, this) },
+        { '2', "To start/stop sorting", std::bind(&TestWidget::startStop, this) }, { WidgetInput::ESC, "To exit", {} } });
   else if (name == WN_ARR_SZ)
     return std::make_unique<InputWidget>(name,
       "Enter the size of the array [" + std::to_string(ArraySort::minArraySize(_arraySort.threadCount())) + ", " +
         std::string(std::to_string(ArraySort::maxArraySize())) + "]: ",
-      "[\\d]+", std::bind(&MainWidget::setArraySize, this, _1));
+      "[\\d]+", std::bind(&TestWidget::setArraySize, this, _1));
   else if (name == WN_ARR_SZ_ERR)
     return std::make_unique<ActionWidget>(
-      name, "Incorrect array size!", ActionWidget::Actions{ { WidgetInput::NO_INPUT, { "", [this]() { removeChild(WN_ARR_SZ_ERR); } } } });
+      name, "Incorrect array size!", ActionWidget::Actions{ { WidgetInput::NO_INPUT, "", [this]() { removeChild(WN_ARR_SZ_ERR); } } });
   else
     return std::unique_ptr<Widget>{};
 }
 
-void MainWidget::readArraySize()
+void TestWidget::readArraySize()
 {
   pushChild(createWidget(WN_ARR_SZ));
 }
 
-void MainWidget::startStop()
+void TestWidget::startStop()
 {
   if (_arraySort.areAllTasksFinished())
     _arraySort.sort();
@@ -162,14 +171,15 @@ void MainWidget::startStop()
     _arraySort.interrupt();
 }
 
-void MainWidget::setArraySize(const std::string& value)
+void TestWidget::setArraySize(const std::string& value)
 {
   size_t size;
   std::stringstream{ value } >> size;
   removeChild(child(WN_ARR_SZ));
   if ((_arraySort.minArraySize() <= size) && (size <= ArraySort::maxArraySize()))
   {
-    std::cout << "Array generation! Please wait!\n";
+    std::printf("%s", "Array generation! Please wait!\n");
+    std::fflush(stdout);
     _arraySort.generateArray(size);
   }
   else

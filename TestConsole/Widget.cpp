@@ -9,21 +9,13 @@
 #include <set>
 #include <stdexcept>
 
-#define ENDL '\n'
-
 int Widget::getInput() noexcept
 {
-  Keyboard kb{};
-  kb.lineInputOff();
-  kb.echoOff();
   return Keyboard::getChar();
 }
 
 void Widget::ungetInput(int ch) noexcept
 {
-  Keyboard kb{};
-  kb.lineInputOff();
-  kb.echoOff();
   Keyboard::ungetChar(ch);
 }
 
@@ -95,7 +87,7 @@ void TableWidget::draw()
 
     // Title
     if (!_title.empty())
-      std::cout << _title << ENDL;
+      std::cout << _title << std::endl;
 
     // Header
     std::cout << colSep;
@@ -104,7 +96,7 @@ void TableWidget::draw()
       std::cout << std::left << std::setw(_colWidths[colIndex]) << std::setfill(' ') << _model->headerData(colIndex) << colSep;
       colTotalWidth += _colWidths[colIndex] + colSepLen;
     }
-    std::cout << ENDL << std::left << std::setw(colTotalWidth) << std::setfill('-') << "" << ENDL;
+    std::cout << std::endl << std::left << std::setw(colTotalWidth) << std::setfill('-') << "" << std::endl;
 
     // Data
     for (const auto& row : *_model)
@@ -112,9 +104,9 @@ void TableWidget::draw()
       std::cout << colSep;
       for (size_t colIndex = 0; colIndex < _model->colCount(); ++colIndex)
         std::cout << std::left << std::setw(_colWidths[colIndex]) << std::setfill(' ') << row[colIndex] << colSep;
-      std::cout << ENDL;
+      std::cout << std::endl;
     }
-    std::cout << std::left << std::setw(colTotalWidth) << std::setfill('-') << "" << ENDL << ENDL;
+    std::cout << std::left << std::setw(colTotalWidth) << std::setfill('-') << "" << std::endl << std::endl;
   }
 }
 
@@ -150,7 +142,7 @@ int InputWidget::execute()
 {
   using Char = decltype(_value)::value_type;
   std::regex re{ _validator };
-  std::set<decltype(getInput())> interruptChars{ WidgetInput::ENTER, WidgetInput::ESC, WidgetInput::REFRESH };
+  std::set<decltype(getInput())> interruptChars{ WidgetInput::ENTER, WidgetInput::RETURN, WidgetInput::ESC, WidgetInput::REFRESH };
   decltype(execute()) input{};
 
   while (true)
@@ -158,15 +150,18 @@ int InputWidget::execute()
     input = getInput();
     if (interruptChars.count(input))
     {
-      std::cout << ENDL;
-      if ((input == WidgetInput::ENTER) && _handler)
+      std::putchar('\n');
+      std::fflush(stdout);
+      if (((input == WidgetInput::ENTER) || (input == WidgetInput::RETURN)) && _handler)
         _handler(_value);
       break;
     }
-    else if (input == WidgetInput::BACK)
+    else if (((input == WidgetInput::BACK) || (input == WidgetInput::DEL)) && !_value.empty())
     {
-      Char ch = input;
-      std::cout << ch << ' ' << ch;
+      std::putchar(WidgetInput::BACK);
+      std::putchar(' ');
+      std::putchar(WidgetInput::BACK);
+      std::fflush(stdout);
       _value.pop_back();
     }
     else if (std::isalnum(input) || std::ispunct(input))
@@ -174,7 +169,8 @@ int InputWidget::execute()
       Char ch = input;
       if (std::regex_match(_value + ch, re))
       {
-        std::cout << ch;
+        std::putchar(ch);
+        std::fflush(stdout);
         _value += ch;
       }
     }
@@ -197,16 +193,19 @@ ActionWidget::ActionWidget(const std::string& name, const std::string& title, Ac
   : Widget(name)
   , _title{ title }
   , _actions{ std::move(actions) }
+  , _indexes{}
 {
+  for (auto action = _actions.cbegin(); action != _actions.cend(); ++action)
+    _indexes.insert({ std::get<char>(*action), action - _actions.cbegin() });
 }
 
 void ActionWidget::draw()
 {
   if (!_title.empty())
-    std::cout << _title << ENDL;
+    std::cout << _title << std::endl;
   for (const auto& action : _actions)
-    if (!action.second.first.empty())
-      std::cout << std::right << std::setw(10) << std::setfill(' ') << inputToStr(action.first) << ". " << action.second.first << ENDL;
+    if (auto& name = std::get<std::string>(action); !name.empty())
+      std::cout << std::right << std::setw(10) << std::setfill(' ') << inputToStr(std::get<char>(action)) << ". " << name << std::endl;
 }
 
 int ActionWidget::execute()
@@ -217,16 +216,16 @@ int ActionWidget::execute()
       return input;
     else
     {
-      if (auto action = _actions.find(WidgetInput::NO_INPUT); action != _actions.end())
+      if (auto index = _indexes.find(WidgetInput::NO_INPUT); index != _indexes.end())
       {
-        if (action->second.second)
-          action->second.second();
+        if (auto& handler = std::get<Handler>(_actions[index->second]); handler)
+          handler();
         return WidgetInput::NO_INPUT;
       }
-      if (auto action = _actions.find(input); action != _actions.end())
+      if (auto index = _indexes.find(input); index != _indexes.end())
       {
-        if (action->second.second)
-          action->second.second();
+        if (auto& handler = std::get<Handler>(_actions[index->second]); handler)
+          handler();
         return input;
       }
     }

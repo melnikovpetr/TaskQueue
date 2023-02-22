@@ -8,8 +8,7 @@ namespace Ui
 class TestDialog;
 }
 
-class TestDialogInternal;
-using ArrayValue = int;
+class ArraySort;
 
 class TestDialog : public QDialog
 {
@@ -28,7 +27,7 @@ public Q_SLOTS:
 
 private:
   Ui::TestDialog* _ui;
-  TestDialogInternal* _data;
+  ArraySort* _data;
 };
 
 #endif // TESTDIALOG_H

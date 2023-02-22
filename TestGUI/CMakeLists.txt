@@ -27,7 +27,7 @@ endif ()
 
 set(PRIVATE_LINK_LIBS
   Qt${QT_VERSION_MAJOR}::Widgets
-  TaskQueue::TaskQueue)
+  TaskQueue::TestCore)
 
 add_executable(TestGUI
   ${EXECUTABLE_FLAGS}

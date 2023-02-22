@@ -4,14 +4,12 @@
 
 int main(int argc, char* argv[])
 {
-  std::ios::sync_with_stdio(false);
-
-  MainWidget mainWidget{};
+  TestWidget testWidget{};
 
   while (true)
   {
-    mainWidget.draw();
-    if (mainWidget.execute() == WidgetInput::ESC)
+    testWidget.draw();
+    if (testWidget.execute() == WidgetInput::ESC)
       break;
   }
 

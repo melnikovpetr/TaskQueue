@@ -3,10 +3,14 @@
 #include <cstdio>
 #include <iostream>
 
+void Keyboard::clearConsole()
+{
+  std::cout << "\033[2J\033[1;1H";
+}
+
 #ifdef _WIN32
 
 #include <SpinMutex.h>
-
 #include <mutex>
 
 #include <Windows.h>
@@ -18,9 +22,12 @@ static SpinMutex& ioSpinLock()
   return _ioSpinLock;
 }
 
-void Keyboard::clearConsole()
+static bool setKeyModeFlag(HANDLE inputHandle, DWORD& mode, DWORD flag, bool on)
 {
-  system("cls");
+  auto changed = on ? !(mode & flag) : (mode & flag);
+  if (changed)
+    ::SetConsoleMode(inputHandle, on ? (mode = mode | flag) : (mode = mode & ~flag));
+  return changed;
 }
 
 int Keyboard::getChar() noexcept
@@ -46,14 +53,6 @@ bool Keyboard::isPressed() noexcept
 {
   std::unique_lock spinLock{ ioSpinLock() };
   return ::_kbhit() > 0;
-}
-
-static bool setKeyModeFlag(HANDLE inputHandle, DWORD& mode, DWORD flag, bool on)
-{
-  auto changed = on ? !(mode & flag) : (mode & flag);
-  if (changed)
-    ::SetConsoleMode(inputHandle, on ? (mode = mode | flag) : (mode = mode & ~flag));
-  return changed;
 }
 
 struct KeyboardMode
@@ -105,44 +104,101 @@ void Keyboard::lineInputOn() noexcept
 
 #else
 
-#include <sys/ioctl.h>
+#include <fcntl.h>
 #include <termios.h>
+#include <unistd.h>
 
-bool isKeyPressed()
+int Keyboard::getChar() noexcept
 {
-  static const int STDIN{ 0 };
-
-  termios term{};
-  int bytesWaiting{ 0 };
-  tcgetattr(STDIN, &term);
-
-  term.c_lflag &= ~ICANON;
-  tcsetattr(STDIN, TCSANOW, &term);
-
-  ioctl(0, FIONREAD, &bytesWaiting);
-
-  term.c_lflag |= ICANON;
-  tcsetattr(STDIN, TCSANOW, &term);
-
-  return bytesWaiting > 0;
+  Keyboard kb{};
+  kb.echoOff();
+  kb.lineInputOff();
+  while (true)
+  {
+    if (auto ch = std::getc(stdin); ch != EOF)
+      return ch;
+    usleep(100000);
+  }
 }
 
-void turnEchoOff()
+void Keyboard::ungetChar(int ch) noexcept
 {
-  static const int STDIN{ 0 };
-  termios term{};
-  tcgetattr(STDIN, &term);
-  term.c_lflag &= ~ECHO;
-  tcsetattr(STDIN, TCSANOW, &term);
+  std::ungetc(ch, stdin);
 }
 
-void turnEchoOn()
+bool Keyboard::isPressed() noexcept
 {
-  static const int STDIN{ 0 };
-  termios term{};
-  tcgetattr(STDIN, &term);
-  term.c_lflag |= ECHO;
-  tcsetattr(STDIN, TCSANOW, &term);
+  Keyboard kb{};
+  kb.lineInputOff();
+  if (auto ch = std::getc(stdin); ch != EOF)
+  {
+    std::ungetc(ch, stdin);
+    return true;
+  }
+  return false;
+}
+
+struct KeyboardMode
+{
+  KeyboardMode()
+    : inputHandle{ STDIN_FILENO }
+  {
+    fcntlOld = fcntlCurr = ::fcntl(STDIN_FILENO, F_GETFL, 0);
+    ::tcgetattr(inputHandle, &termiosCurr);
+    c_lflagOld = termiosCurr.c_lflag;
+  }
+
+  void restore() noexcept
+  {
+    if (termiosCurr.c_lflag != c_lflagOld)
+      ::tcsetattr(inputHandle, TCSANOW, (termiosCurr.c_lflag = c_lflagOld, &termiosCurr));
+    if (fcntlCurr != fcntlOld)
+      ::fcntl(inputHandle, F_SETFL, (fcntlCurr = fcntlOld));
+  }
+
+  int inputHandle;
+  int fcntlOld;
+  int fcntlCurr;
+  tcflag_t c_lflagOld;
+  termios termiosCurr;
+};
+
+Keyboard::Keyboard()
+  : _mode{ std::make_unique<KeyboardMode>() }
+{
+}
+
+Keyboard::~Keyboard()
+{
+  _mode->restore();
+}
+
+void Keyboard::echoOff() noexcept
+{
+  _mode->termiosCurr.c_lflag &= ~ECHO;
+  ::tcsetattr(_mode->inputHandle, TCSANOW, &_mode->termiosCurr);
+}
+
+void Keyboard::echoOn() noexcept
+{
+  _mode->termiosCurr.c_lflag |= ECHO;
+  ::tcsetattr(_mode->inputHandle, TCSANOW, &_mode->termiosCurr);
+}
+
+void Keyboard::lineInputOff() noexcept
+{
+  _mode->fcntlCurr |= O_NONBLOCK;
+  ::fcntl(_mode->inputHandle, F_SETFL, _mode->fcntlCurr);
+  _mode->termiosCurr.c_lflag &= ~ICANON;
+  ::tcsetattr(_mode->inputHandle, TCSANOW, &_mode->termiosCurr);
+}
+
+void Keyboard::lineInputOn() noexcept
+{
+  _mode->fcntlCurr &= ~O_NONBLOCK;
+  ::fcntl(_mode->inputHandle, F_SETFL, _mode->fcntlCurr);
+  _mode->termiosCurr.c_lflag |= ICANON;
+  ::tcsetattr(_mode->inputHandle, TCSANOW, &_mode->termiosCurr);
 }
 
 #endif // _WIN32

@@ -33,6 +33,7 @@ void TaskQueue::clearAndPush(std::vector<Task>&& tasks)
 {
   {
     std::unique_lock spinLock{ _isBusy };
+    _queue.clear();
     for (auto& task : tasks)
       _queue.push_back(std::move(task));
   }
